@@ -1,5 +1,6 @@
 #include "network/session/SessionInternal.hpp"
 #include "server/ServerData.hpp"
+#include "server/vanilla/BedrockData.hpp"
 
 namespace perlite {
     void Session::OnRequestSettings(std::span<const uint8_t> body) {
@@ -286,6 +287,12 @@ namespace perlite {
         g.serverAuthoritativeInventory = true;
         g.engine = "Perlite";
         g.blockNetworkIdsAreHashes = true;
+        for (const NamedNbt& block : BedrockData::Instance().BlockProperties()) {
+            proto::BlockPropertiesEntry entry;
+            entry.name = block.name;
+            entry.state.bytes = block.nbt;
+            g.blockProperties.push_back(std::move(entry));
+        }
         g.serverIdentifier = cfg.name;
         Send(g);
     }

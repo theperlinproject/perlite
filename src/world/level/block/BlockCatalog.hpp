@@ -14,6 +14,8 @@ namespace perlite {
         std::string name;
         int16_t networkId = 0;
         int32_t blockHash = 0;
+        int32_t version = 0;
+        bool componentBased = false;
 
         bool block = true;
     };
@@ -26,6 +28,7 @@ namespace perlite {
                   const std::string& extraItemsPath = {});
 
         void LoadBuiltin();
+        void UseVanillaItems(const std::vector<CatalogItem>& vanilla);
         bool Loaded() const { return !items.empty(); }
         bool FromFiles() const { return fromFiles; }
 

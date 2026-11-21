@@ -1,4 +1,5 @@
 #include "server/Server.hpp"
+#include "server/vanilla/BedrockData.hpp"
 #include "world/crafting/Recipes.hpp"
 
 #include "network/auth/LoginVerifier.hpp"
@@ -89,6 +90,31 @@ namespace perlite {
             } else {
                 LogInfo("block data: " + std::to_string(catalog.StateCount()) + " states, " +
                         std::to_string(catalog.Items().size()) + " items");
+            }
+            {
+                BedrockData& vanilla = BedrockData::Instance();
+                const std::filesystem::path dir = BedrockData::Find(config.blockDataDir);
+                std::string vanillaError;
+                if (!dir.empty() && vanilla.Load(dir, vanillaError)) {
+                    std::vector<CatalogItem> items;
+                    items.reserve(vanilla.Items().size());
+                    for (const VanillaItem& v : vanilla.Items()) {
+                        CatalogItem item;
+                        item.name = v.name;
+                        item.networkId = v.networkId;
+                        item.version = v.version;
+                        item.componentBased = v.componentBased;
+                        items.push_back(std::move(item));
+                    }
+                    catalog.UseVanillaItems(items);
+                    LogInfo("vanilla data: " + std::to_string(catalog.Items().size()) + " items, " +
+                            std::to_string(vanilla.BlockProperties().size()) + " data-driven blocks");
+                } else {
+                    LogWarn("vanilla item data not found" +
+                            (vanillaError.empty() ? std::string() : " (" + vanillaError + ")") +
+                            ": Bedrock clients will not be able to join; set PERLITE_BEDROCK_DATA to the "
+                            "data/bedrock folder");
+                }
             }
             BuildItemPackets();
             Recipes::Instance().Load();
@@ -1162,10 +1188,39 @@ namespace perlite {
         }
     }
 
+    namespace {
+        bool CreativeEligible(const CatalogItem& item) {
+            static const char* const kExact[] = {
+                "water", "lava", "fire", "soul_fire", "portal", "end_portal", "end_gateway", "bubble_column",
+                "camera", "board", "chalkboard", "portfolio", "poster", "allow", "deny", "border_block",
+                "structure_void", "netherreactor", "glowingobsidian", "frosted_ice", "invisible_bedrock",
+                "carrots", "potatoes", "beetroot", "wheat", "melon_stem", "pumpkin_stem", "cocoa", "redstone_wire",
+                "tripwire", "piston_arm_collision", "sticky_piston_arm_collision", "moving_block", "unknown",
+                "info_update", "info_update2", "reserved6", "balloon", "sparkler", "glow_stick", "ice_bomb",
+                "medicine", "bleach", "rapid_fertilizer", "compound", "chemistry_table", "agent_spawn_egg",
+                "npc_spawn_egg", "stonecutter"};
+            static const char* const kContains[] = {"placeholder", "_wall_sign", "_standing_sign", "wall_banner",
+                                                    "standing_banner", "_double_slab", "flowing_", "lit_",
+                                                    "unlit_", "_candle_cake", "cave_vines_", "element_", "hard_",
+                                                    "colored_torch", "underwater_", "light_block_", "client_request"};
+            const std::string_view name = std::string_view(item.name).substr(item.name.find(':') + 1);
+            for (const char* hidden : kExact)
+                if (name == hidden)
+                    return false;
+            for (const char* hidden : kContains)
+                if (name.contains(hidden))
+                    return false;
+            return true;
+        }
+    }
+
     void Server::BuildItemPackets() {
         const BlockCatalog& catalog = BlockCatalog::Instance();
         proto2225::ItemRegistryPacket registry;
         proto2225::CreativeContentPacket creative;
+        std::unordered_map<std::string, const std::vector<uint8_t>*> components;
+        for (const NamedNbt& c : BedrockData::Instance().ItemComponents())
+            components[c.name] = &c.nbt;
         const std::vector<GroupDef>& defs = Groups();
         std::vector<proto2225::CreativeContentPacketGroupsEntry> groups(defs.size() + 1);
         for (size_t i = 0; i < defs.size(); i++) {
@@ -1190,9 +1245,13 @@ namespace perlite {
             proto2225::ItemstatesEntry entry;
             entry.name = item.name;
             entry.runtimeId = item.networkId;
-            entry.componentBased = false;
-            entry.version = proto2225::ItemstatesEntryVersion::Legacy;
+            entry.componentBased = item.componentBased;
+            entry.version = static_cast<proto2225::ItemstatesEntryVersion>(item.version);
+            if (const auto it = components.find(item.name); it != components.end())
+                entry.nbt.bytes = *it->second;
             registry.itemstates.push_back(std::move(entry));
+            if (!CreativeEligible(item))
+                continue;
 
             proto2225::ItemLegacy legacy;
             legacy.networkId = item.networkId;

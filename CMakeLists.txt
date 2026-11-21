@@ -50,6 +50,7 @@ option(PERLITE_LEVELDB "Save worlds in the Bedrock LevelDB format (needs zlib)" 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(PerliteDependencies)
 include(PerliteProtocol)
+include(PerliteBedrockData)
 
 set(PERLITE_SOURCES
     src/common/Json.cpp
@@ -81,6 +82,7 @@ set(PERLITE_SOURCES
     src/server/Config.cpp
     src/server/Server.cpp
     src/server/ServerData.cpp
+    src/server/vanilla/BedrockData.cpp
     src/server/ServerStorage.cpp
     src/server/packs/ResourcePackManager.cpp
     src/server/access/Access.cpp
@@ -177,7 +179,7 @@ foreach(t perlite_objects ${PERLITE_LIBS})
     target_include_directories(${t} PRIVATE src include ${PERLIN_API_INCLUDE_DIRS})
     target_compile_features(${t} PUBLIC cxx_std_23)
     set_target_properties(${t} PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
-    target_compile_definitions(${t} PRIVATE PERLITE_BUILD_SHARED "PERLITE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+    target_compile_definitions(${t} PRIVATE PERLITE_BUILD_SHARED "PERLITE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"" "PERLITE_BEDROCK_DIR=\"${PERLITE_BEDROCK_DIR}\"")
     target_link_libraries(${t} PRIVATE perlite_protocol miniz OpenSSL::Crypto OpenSSL::SSL Threads::Threads)
     if(PERLITE_NETHERNET)
         target_link_libraries(${t} PRIVATE ${PERLITE_DATACHANNEL})
@@ -243,6 +245,7 @@ if(PERLITE_BUILD_EXE)
     endif()
     install(TARGETS perlite RUNTIME DESTINATION .)
     install(DIRECTORY data/ DESTINATION data)
+    install(DIRECTORY "${PERLITE_BEDROCK_DIR}/" DESTINATION data/bedrock)
 endif()
 
 if(PERLITE_BUILD_TESTS)

@@ -221,6 +221,26 @@ namespace perlite {
         }
     }
 
+    void BlockCatalog::UseVanillaItems(const std::vector<CatalogItem>& vanilla) {
+        items.clear();
+        byId.clear();
+        byHash.clear();
+        byName.clear();
+        for (const CatalogItem& source : vanilla) {
+            if (source.name == "minecraft:air" || source.networkId == 0 || byId.contains(source.networkId))
+                continue;
+            CatalogItem item = source;
+            const auto block = defaultByName.find(item.name);
+            item.block = block != defaultByName.end();
+            item.blockHash = item.block ? block->second : 0;
+            byId[item.networkId] = items.size();
+            if (item.block && !byHash.contains(item.blockHash))
+                byHash[item.blockHash] = items.size();
+            byName[item.name] = items.size();
+            items.push_back(std::move(item));
+        }
+    }
+
     bool BlockCatalog::Load(const std::string& blockStatesPath, const std::string& itemNamesPath,
                             std::string& error, const std::string& extraItemsPath) {
         std::string statesText;
