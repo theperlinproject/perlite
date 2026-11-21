@@ -371,20 +371,60 @@ namespace perlite::nethernet {
         } else {
             request.body = data.substr(headEnd + 4);
             size_t length = 0;
-            if (const std::string cl = request.Header("content-length"); !cl.empty())
+            const bool chunked =
+                str::Lower(request.Header("transfer-encoding")).find("chunked") != std::string::npos;
+            if (const std::string cl = request.Header("content-length"); !cl.empty() && !chunked)
                 length = static_cast<size_t>(std::strtoull(cl.c_str(), nullptr, 10));
-            if (length > kMaxBodyBytes) {
+            // HTTP stacks (WinHTTP, libcurl) hold a POST body back until the server says go on.
+            if (str::Lower(request.Header("expect")) == "100-continue" && request.body.empty() &&
+                (length > 0 || chunked))
+                WriteAll(client, "HTTP/1.1 100 Continue\r\n\r\n");
+            const auto readMore = [&] {
+                if (!WaitReadable(client, remaining()))
+                    return false;
+                const int n = ReadSome(client, buf, sizeof(buf));
+                if (n <= 0)
+                    return false;
+                request.body.append(buf, static_cast<size_t>(n));
+                return request.body.size() <= kMaxBodyBytes + 4096;
+            };
+            bool tooLarge = length > kMaxBodyBytes;
+            if (chunked && !tooLarge) {
+                std::string decoded;
+                size_t pos = 0;
+                bool done = false;
+                while (!done) {
+                    const size_t eol = request.body.find("\r\n", pos);
+                    if (eol == std::string::npos) {
+                        if (!readMore())
+                            break;
+                        continue;
+                    }
+                    const size_t size = static_cast<size_t>(
+                        std::strtoull(request.body.substr(pos, eol - pos).c_str(), nullptr, 16));
+                    if (size == 0) {
+                        done = true;
+                        break;
+                    }
+                    if (decoded.size() + size > kMaxBodyBytes) {
+                        tooLarge = true;
+                        break;
+                    }
+                    while (request.body.size() < eol + 2 + size + 2 && readMore()) {}
+                    if (request.body.size() < eol + 2 + size)
+                        break;
+                    decoded += request.body.substr(eol + 2, size);
+                    pos = eol + 2 + size + 2;
+                }
+                request.body = std::move(decoded);
+            }
+            if (tooLarge) {
                 response.status = 413;
                 response.contentType = "text/plain";
                 response.body = "Request body is too large";
             } else {
-                while (request.body.size() < length && WaitReadable(client, remaining())) {
-                    const int n = ReadSome(client, buf, sizeof(buf));
-                    if (n <= 0)
-                        break;
-                    request.body.append(buf, static_cast<size_t>(n));
-                }
-                if (request.body.size() > length)
+                while (!chunked && request.body.size() < length && readMore()) {}
+                if (!chunked && request.body.size() > length)
                     request.body.resize(length);
                 includeBody = request.method != "HEAD";
                 try {

@@ -160,38 +160,13 @@ namespace perlite {
         }
         if (config.xboxAuth && !config.loopbackOnly)
             auth::StartTokenKeyRefresh();
-        const bool wantRakNet = !config.loopbackOnly && (config.transport == "raknet" || config.transport == "both");
-        const bool wantNetherNet = config.nethernet && !config.loopbackOnly && config.transport != "raknet";
-        if (wantRakNet && wantNetherNet) {
-            const bool sharedPort = config.udpPortsSet ? (config.udpPortBegin == config.port && config.udpPortEnd == config.port)
-                                                       : config.iceUdpMux;
-            if (sharedPort) {
-                config.iceUdpPort = static_cast<uint16_t>(config.port + 2);
-                LogInfo("raknet takes udp " + std::to_string(config.port) + "; nethernet's webrtc traffic moves to udp " +
-                        std::to_string(config.iceUdpPort));
-            }
-        }
-        if (wantRakNet) {
-            raknet = CreateRakNetListener(config, [this] {
-                std::string name = config.name;
-                std::replace(name.begin(), name.end(), ';', ' ');
-                return "MCPE;" + name + ";2225;1.26.60;" +
-                       std::to_string(InGamePlayers().size()) + ";" + std::to_string(config.maxPlayers) + ";";
-            });
-            std::string raknetError;
-            if (raknet->Start(events, raknetError)) {
-                LogInfo("raknet on udp " + config.bindAddress + ":" + std::to_string(config.port));
-            } else {
-                LogWarn(raknetError + "; regular Bedrock clients cannot join until the port is free");
-                raknet.reset();
-            }
-        }
+        const bool wantNetherNet = config.nethernet && !config.loopbackOnly;
         if (wantNetherNet) {
             nethernet = CreateNetherNetListener(config, [this] {
                 std::ostringstream o;
                 o << "{\"name\":\"" << ::perlite::json::Escape(config.name)
                   << "\",\"protocol\":2225,\"version\":\"1.26.60\",\"level\":\""
-                  << ::perlite::json::Escape(config.levelName) << "\",\"players\":" << InGamePlayers().size()
+                  << ::perlite::json::Escape(config.levelName) << "\",\"players\":" << onlineCount.load()
                   << ",\"maxPlayers\":" << config.maxPlayers << ",\"gameType\":" << config.gameMode << "}";
                 return o.str();
             });
@@ -253,8 +228,6 @@ namespace perlite {
         sessions.clear();
         if (nethernet)
             nethernet->Stop();
-        if (raknet)
-            raknet->Stop();
         loopback->Stop();
         plugins->UnloadAll();
         chunks.reset();
@@ -329,6 +302,7 @@ namespace perlite {
                 plugins->Dispatch<abi::Event::Tick>({.dt = 0.05f, .tick = tick});
         }
         std::vector<Session*> players = InGamePlayers();
+        onlineCount = static_cast<int>(players.size());
         for (Session* s : players)
             if (s->TakeMoved())
                 for (Session* other : players)

@@ -437,10 +437,17 @@ namespace perlite {
             return true;
         }
         if (key == "transport") {
-            if (lower == "nethernet" || lower == "raknet" || lower == "both" || lower == "nethernet-only")
-                transport = lower;
+            if (lower == "nethernet" || lower == "nethernet-only")
+                transport = "nethernet";
+            else if (lower == "raknet" || lower == "both") {
+                // RakNet is gone: Bedrock 26.60+ clients only join over NetherNet.
+                transport = "nethernet";
+                if (warning)
+                    *warning = key + "=" + v + ": RakNet support was removed, using nethernet";
+                return true;
+            }
             else
-                bad("nethernet, raknet, both or nethernet-only");
+                bad("nethernet");
             return true;
         }
         if (key == "enable-lan-visibility")

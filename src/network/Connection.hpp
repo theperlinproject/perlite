@@ -76,5 +76,7 @@ namespace perlite {
         std::vector<uint8_t> buffer;
     };
 
-    std::vector<std::vector<uint8_t>> SplitFragments(const uint8_t* data, size_t size);
+    // partSize is the payload per message; the remote max-message-size minus the 1-byte header.
+    std::vector<std::vector<uint8_t>> SplitFragments(const uint8_t* data, size_t size,
+                                                     size_t partSize = kFragmentSize);
 }

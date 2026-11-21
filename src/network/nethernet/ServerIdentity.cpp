@@ -4,7 +4,11 @@
 #include <openssl/core_names.h>
 #include <openssl/ecdsa.h>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
 #include <openssl/x509.h>
+
+#include <cstdio>
+#include <filesystem>
 
 #include <ctime>
 #include <sstream>
@@ -106,7 +110,69 @@ namespace perlite::nethernet {
     }
 
     ServerIdentity::ServerIdentity() : impl(std::make_unique<Impl>()) {
-        impl->key = EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "P-384");
+        Adopt(EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "P-384"));
+    }
+
+    bool ServerIdentity::LoadOrCreate(const std::string& path, std::string& note) {
+        if (path.empty())
+            return Valid();
+        if (FILE* f = std::fopen(path.c_str(), "rb")) {
+            EVP_PKEY* loaded = PEM_read_PrivateKey(f, nullptr, nullptr, nullptr);
+            std::fclose(f);
+            if (loaded && EVP_PKEY_is_a(loaded, "EC") && EVP_PKEY_get_bits(loaded) == 384) {
+                Adopt(loaded);
+                if (Valid()) {
+                    note = "loaded from " + path;
+                    return true;
+                }
+            } else if (loaded) {
+                EVP_PKEY_free(loaded);
+            }
+            note = path + " is not a P-384 key; using a new one";
+        }
+        if (!Valid())
+            Adopt(EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "P-384"));
+        if (!Valid())
+            return false;
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+        if (FILE* f = std::fopen(path.c_str(), "wb")) {
+            const bool ok = PEM_write_PrivateKey(f, impl->key, nullptr, nullptr, 0, nullptr, nullptr) == 1;
+            std::fclose(f);
+#ifndef _WIN32
+            std::filesystem::permissions(path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+                                         ec);
+#endif
+            if (ok && note.empty())
+                note = "new identity saved to " + path;
+        }
+        return true;
+    }
+
+    std::string ServerIdentity::Fingerprint() const {
+        if (!Valid())
+            return {};
+        unsigned char digest[32];
+        unsigned int len = 0;
+        EVP_Digest(impl->publicDer.data(), impl->publicDer.size(), digest, &len, EVP_sha256(), nullptr);
+        static const char* hex = "0123456789ABCDEF";
+        std::string out;
+        for (unsigned i = 0; i < len; i++) {
+            if (i)
+                out += ':';
+            out += hex[digest[i] >> 4];
+            out += hex[digest[i] & 15];
+        }
+        return out;
+    }
+
+    void ServerIdentity::Adopt(EVP_PKEY* key) {
+        if (impl->key)
+            EVP_PKEY_free(impl->key);
+        impl->key = key;
+        impl->publicDer.clear();
+        impl->x.clear();
+        impl->y.clear();
         if (!impl->key)
             return;
         unsigned char* der = nullptr;
@@ -219,7 +285,7 @@ namespace perlite::nethernet {
     }
 
     std::string AddHostCandidate(const std::string& sdp, const std::string& address, uint16_t port) {
-        if (address.empty() || port == 0 || address.find(':') != std::string::npos)
+        if (address.empty() || port == 0 || address == "0.0.0.0" || address == "::")
             return sdp;
         std::vector<std::string> lines = Lines(sdp);
         size_t insertAt = lines.size();

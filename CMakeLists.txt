@@ -33,7 +33,7 @@ else()
     set(PERLITE_TOP_LEVEL OFF)
 endif()
 
-option(PERLITE_NETHERNET "NetherNet transport (libdatachannel); without it only RakNet and loopback connections work" ON)
+option(PERLITE_NETHERNET "NetherNet transport (libdatachannel); without it only loopback connections work" ON)
 option(PERLITE_GPU "GPU terrain generation through conduit" OFF)
 option(PERLITE_EMBED "Build perlite_embed: the server without a wasm runtime, for hosts that bring their own (the Perlin client)" OFF)
 option(PERLITE_BUILD_SHARED "Build the perlite shared library with the C embedding API" ${PERLITE_TOP_LEVEL})
@@ -63,7 +63,6 @@ set(PERLITE_SOURCES
     src/network/PacketCipher.cpp
     src/network/auth/LoginVerifier.cpp
     src/network/loopback/LoopbackListener.cpp
-    src/network/raknet/RakNetListener.cpp
     src/network/session/ChatHandler.cpp
     src/network/session/ChunkStreamer.cpp
     src/network/session/EntityView.cpp
@@ -149,6 +148,7 @@ if(PERLITE_NETHERNET)
     list(APPEND PERLITE_SOURCES
         src/network/nethernet/NetherNetListener.cpp
         src/network/nethernet/SignalingServer.cpp
+        src/network/nethernet/LanDiscovery.cpp
         src/network/nethernet/ServerIdentity.cpp)
 else()
     list(APPEND PERLITE_SOURCES src/network/nethernet/NetherNetStub.cpp)

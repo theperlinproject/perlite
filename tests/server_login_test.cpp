@@ -188,7 +188,7 @@ int main() {
     config.dataDir = dir.string();
     config.generator = "flat";
     config.terrainBackend = "cpu";
-    config.transport = "raknet";
+    config.nethernet = false;
     config.port = 19361;
     config.bindAddress = "127.0.0.1";
     config.networkEncryption = true;

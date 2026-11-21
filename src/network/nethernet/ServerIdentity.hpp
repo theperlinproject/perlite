@@ -4,6 +4,8 @@
 #include <mutex>
 #include <string>
 
+typedef struct evp_pkey_st EVP_PKEY;
+
 namespace perlite::nethernet {
 
     class ServerIdentity {
@@ -14,6 +16,10 @@ namespace perlite::nethernet {
         ServerIdentity& operator=(const ServerIdentity&) = delete;
 
         bool Valid() const;
+        // Keeps the key in a PEM file so the trust-on-first-use pin survives restarts.
+        bool LoadOrCreate(const std::string& path, std::string& note);
+        // SHA-256 of the public key, for publishing out of band.
+        std::string Fingerprint() const;
         std::string Token() const;
         std::string SignDetached(const std::string& payload) const;
         std::string AnswerIdentity(const std::string& algorithm, const std::string& digest) const;
@@ -22,6 +28,7 @@ namespace perlite::nethernet {
         static std::string Base64(const std::string& data, bool url);
 
     private:
+        void Adopt(EVP_PKEY* key);
         struct Impl;
         std::unique_ptr<Impl> impl;
     };

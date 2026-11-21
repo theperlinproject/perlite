@@ -8,6 +8,12 @@
 #include "protocol/Packets.hpp"
 
 #include "support/MiniHttp.hpp"
+#include "network/nethernet/LanDiscovery.hpp"
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <rtc/rtc.hpp>
 
 #include <openssl/bn.h>
@@ -17,6 +23,7 @@
 #include <openssl/param_build.h>
 
 #include <atomic>
+#include <sstream>
 #include <chrono>
 #include <mutex>
 #include <thread>
@@ -162,19 +169,77 @@ namespace {
 }
 
 namespace {
+    namespace lan = perlite::nethernet::lan;
+
+    // A stand-in for a Bedrock client on the LAN: broadcasts discovery and signals over UDP 7551.
+    struct LanClient {
+        int sock = -1;
+        uint64_t id = 0x1122334455667788ull;
+        uint64_t server = 0;
+        std::string serverData;
+        LanClient() {
+            sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+            sockaddr_in a{};
+            a.sin_family = AF_INET;
+            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            ::bind(sock, reinterpret_cast<sockaddr*>(&a), sizeof(a));
+        }
+        ~LanClient() { ::close(sock); }
+        void Send(uint16_t type, const std::string& body) {
+            const std::string d = lan::Encode(type, id, body);
+            sockaddr_in to{};
+            to.sin_family = AF_INET;
+            to.sin_port = htons(lan::kPort);
+            to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            ::sendto(sock, d.data(), d.size(), 0, reinterpret_cast<sockaddr*>(&to), sizeof(to));
+        }
+        void Signal(const std::string& text) { Send(lan::kMessage, lan::MessageBody(server, text)); }
+        // Next packet from the server, or false after timeoutMs.
+        bool Receive(uint16_t& type, std::string& body, int timeoutMs) {
+            pollfd p{sock, POLLIN, 0};
+            std::string buf(65536, '\0');
+            const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+            while (std::chrono::steady_clock::now() < end) {
+                if (::poll(&p, 1, 50) <= 0)
+                    continue;
+                const ssize_t n = ::recv(sock, buf.data(), buf.size(), 0);
+                uint64_t sender = 0;
+                if (n > 0 && lan::Decode(buf.substr(0, static_cast<size_t>(n)), type, sender, body) && sender != id) {
+                    server = sender;
+                    return true;
+                }
+            }
+            return false;
+        }
+        bool Discover() {
+            Send(lan::kRequest, {});
+            uint16_t type = 0;
+            std::string body;
+            while (Receive(type, body, 2000))
+                if (type == lan::kResponse)
+                    return lan::ParseResponseBody(body, serverData);
+            return false;
+        }
+    };
+
     struct Outcome {
         bool connected = false;
         bool loginSuccess = false;
         bool disconnected = false;
         int disconnectReason = -1;
         bool gotChunk = false;
+        bool spawned = false;
     };
 
     Outcome JoinOver(uint16_t port, const std::string& identity, const std::string& clientToken,
-                     const testauth::Key* assertWith, bool fullHandshake) {
+                     const testauth::Key* assertWith, bool fullHandshake, bool overLan = false) {
         Outcome out;
         auto probe = minihttp::Request(port, "GET", "/v1/join?version=1.26.60&protocol=2225&platform=1&id=7");
-        CHECK(probe && probe->status == 200 && probe->body.empty());
+        CHECK(probe && probe->status == 200 && probe->contentType == "application/json");
+        if (probe) {
+            json::Value v;
+            CHECK(json::Parse(probe->body, v) && v["maxPlayers"].Int() > 0 && !v["name"].String().empty());
+        }
         auto info = minihttp::Request(port, "GET", "/v1/join?info");
         CHECK(info && info->status == 200);
         if (info) {
@@ -212,6 +277,57 @@ namespace {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         CHECK(gathered);
         std::string offer = std::string(*pc->localDescription());
+        if (overLan) {
+            // Vanilla trickles: the offer goes out bare and the candidates follow one by one.
+            LanClient client;
+            CHECK(client.Discover());
+            std::string bare, candidates;
+            std::vector<std::string> lines;
+            {
+                std::istringstream in(offer);
+                std::string line;
+                while (std::getline(in, line)) {
+                    if (!line.empty() && line.back() == '\r')
+                        line.pop_back();
+                    if (line.starts_with("a=candidate:"))
+                        lines.push_back(line.substr(2) + " generation 0 ufrag x network-id 1 network-cost 10");
+                    else if (line != "a=end-of-candidates")
+                        bare += line + "\r\n";
+                }
+            }
+            client.Signal("CONNECTREQUEST 4242 " + bare);
+            for (const auto& c : lines)
+                client.Signal("CANDIDATEADD 4242 " + c);
+            bool answered = false;
+            uint16_t type = 0;
+            std::string body;
+            for (int i = 0; i < 100 && !open; i++) {
+                if (!client.Receive(type, body, 100) || type != lan::kMessage)
+                    continue;
+                uint64_t to = 0;
+                std::string text;
+                if (!lan::ParseMessageBody(body, to, text) || to != client.id)
+                    continue;
+                if (text.starts_with("CONNECTRESPONSE 4242 ")) {
+                    const std::string sdp = text.substr(21);
+                    CHECK(AnswerIdentityValid(sdp));
+                    pc->setRemoteDescription(rtc::Description(sdp, rtc::Description::Type::Answer));
+                    answered = true;
+                } else if (text.starts_with("CANDIDATEADD 4242 ") && answered) {
+                    pc->addRemoteCandidate(rtc::Candidate(text.substr(18), "0"));
+                } else if (text.starts_with("CONNECTERROR")) {
+                    std::fprintf(stderr, "lan error: %s\n", text.c_str());
+                    break;
+                }
+            }
+            CHECK(answered);
+            for (int i = 0; i < 200 && !open; i++)
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            CHECK(open);
+            out.connected = open;
+            if (!open)
+                return out;
+        } else {
         if (assertWith) {
             offer = testauth::AssertOffer(offer, *assertWith);
         } else {
@@ -236,6 +352,7 @@ namespace {
         out.connected = open;
         if (!open)
             return out;
+        }
 
         const auto send = [&](const std::vector<uint8_t>& wire) {
             for (const auto& p : SplitFragments(wire.data(), wire.size()))
@@ -312,11 +429,23 @@ namespace {
             send(Wire(codec, done));
             CHECK(waitFor(proto::StartGamePacket::kId));
             proto::RequestChunkRadiusPacket radius;
-            radius.chunkRadius = 2;
-            radius.maxRadius = 2;
+            radius.chunkRadius = 8;
+            radius.maxRadius = 8;
             send(Wire(codec, radius));
             out.gotChunk = waitFor(proto::LevelChunkPacket::kId);
             CHECK(out.gotChunk);
+            // A full spawn pushes several hundred KB through the SCTP send queue, which is what a
+            // real client sees; the session must stay up until PlayerSpawn arrives.
+            bool spawned = false;
+            for (int i = 0; i < 200 && !spawned; i++) {
+                if (!waitFor(proto::PlayStatusPacket::kId, &body, 1))
+                    continue;
+                proto::PlayStatusPacket st;
+                net::ReadStream rs(body.data(), body.size());
+                spawned = Read(rs, st) && st.status == proto::PlayStatusPacketStatus::PlayerSpawn;
+            }
+            out.spawned = spawned;
+            CHECK(spawned);
         }
         pc->close();
         return out;
@@ -324,17 +453,58 @@ namespace {
 }
 
 int main() {
+    // Loopback drains SCTP instantly; a small send buffer makes libdatachannel queue messages the
+    // way it does on a real network, where send() then returns false for buffered data.
+    {
+        rtc::SctpSettings sctp;
+        sctp.sendBufferSize = 64 * 1024;
+        rtc::SetSctpSettings(sctp);
+    }
+    {
+        // Byte-for-byte the ServerData df-mc/go-nethernet expects (server_data_test.go).
+        lan::ServerData d;
+        d.serverName = "server";
+        d.protocol = 2181;
+        d.version = "1.26.50";
+        d.levelName = "world";
+        d.gameType = 2;
+        d.playerCount = 1;
+        d.maxPlayerCount = 8;
+        d.hardcore = true;
+        d.acceptsOnlineAuth = true;
+        d.acceptsSelfSignedAuth = true;
+        d.nonce = "nonce";
+        d.connectionType = 4;
+        static const char kWant[] = "\x07\x06server\x8a\x22\x07" "1.26.50\x05world\x02\x10\x04\x00\x01\x01\x01\x05nonce\x08";
+        const std::string want(kWant, sizeof(kWant) - 1);
+        CHECK(want.size() == 38);
+        CHECK(lan::EncodeServerData(d) == want);
+        lan::ServerData back;
+        CHECK(lan::DecodeServerData(want, back) && back.serverName == "server" && back.protocol == 2181 &&
+              back.gameType == 2 && back.maxPlayerCount == 8 && back.nonce == "nonce");
+        uint16_t type = 0;
+        uint64_t sender = 0;
+        std::string body;
+        const std::string wire = lan::Encode(lan::kMessage, 77, lan::MessageBody(5, std::string(3000, 'x')));
+        CHECK(lan::Decode(wire, type, sender, body) && type == lan::kMessage && sender == 77);
+        uint64_t to = 0;
+        std::string text;
+        CHECK(lan::ParseMessageBody(body, to, text) && to == 5 && text.size() == 3000);
+        std::string tampered = wire;
+        tampered[40] ^= 1;
+        CHECK(!lan::Decode(tampered, type, sender, body));
+    }
     constexpr uint16_t kPort = 19333;
     ServerConfig config;
     config.port = kPort;
     config.bindAddress = "127.0.0.1";
-    config.generator = "flat";
+    config.generator = std::getenv("PS_TEST_VANILLA") ? "vanilla" : "flat";
     config.terrainBackend = "cpu";
     config.iceServers = {"none"};
     config.iceBindAddress = "127.0.0.1";
     config.iceUdpMux = std::getenv("PS_TEST_MUX") != nullptr;
     config.networkEncryption = false;
-    config.viewDistance = 4;
+    config.viewDistance = 8;
     Server open(config);
     std::string error;
     if (!open.Start(error)) {
@@ -359,6 +529,17 @@ int main() {
         const Outcome forged =
             JoinOver(kPort, guest.Identity({"a.b.c"}, 2), guest.ClientToken(), nullptr, false);
         CHECK(forged.connected && !forged.loginSuccess);
+
+        // LAN: the world is advertised on 7551 and joinable through UDP signalling alone.
+        LanClient finder;
+        CHECK(finder.Discover());
+        lan::ServerData d;
+        CHECK(lan::DecodeServerData(finder.serverData, d));
+        CHECK(d.serverName == config.name && d.protocol == 2225 && d.version == "1.26.60");
+        CHECK(d.connectionType == 4 && d.maxPlayerCount == config.maxPlayers && d.acceptsSelfSignedAuth);
+        const Outcome viaLan =
+            JoinOver(kPort, guest.Identity(guest.Chain(false), 2), guest.ClientToken(), nullptr, true, true);
+        CHECK(viaLan.connected && viaLan.loginSuccess && viaLan.spawned);
     }
     open.RequestStop();
     ticker.join();

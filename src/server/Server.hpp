@@ -278,7 +278,6 @@ namespace perlite {
         std::unique_ptr<PluginHost> plugins;
         std::unique_ptr<LoopbackListener> loopback;
         std::unique_ptr<Listener> nethernet;
-        std::unique_ptr<Listener> raknet;
         EventQueue events;
         int spawnX = 0, spawnY = 0, spawnZ = 0;
         int64_t dayTime = 6000;
@@ -308,6 +307,8 @@ namespace perlite {
         std::vector<std::thread> locateThreads;
         std::set<uint64_t> locating;
         std::atomic<bool> locateCancel{false};
+        // Read by the signalling and LAN discovery threads, written once per tick.
+        std::atomic<int> onlineCount{0};
         AccessList permissionList{AccessList::Kind::Permissions}, allowList{AccessList::Kind::Allowlist};
 
         std::unordered_map<uint64_t, std::unique_ptr<Session>> sessions;
@@ -357,5 +358,4 @@ namespace perlite {
 
     std::unique_ptr<Listener> CreateNetherNetListener(const ServerConfig& config,
                                                       std::function<std::string()> infoJson);
-    std::unique_ptr<Listener> CreateRakNetListener(const ServerConfig& config, std::function<std::string()> motd);
 }
