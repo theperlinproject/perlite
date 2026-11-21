@@ -339,6 +339,18 @@ namespace perlite::serverdata {
         return bytes;
     }
 
+    const std::vector<uint8_t>& JigsawStructureDataNbt() {
+        static const std::vector<uint8_t> bytes = [] {
+            nbt::Writer w;
+            w.BeginRoot();
+            for (const char* name : {"processors", "template_pools", "jigsaws", "structure_sets"})
+                w.BeginList(name, nbt::Compound, 0);
+            w.EndCompound();
+            return w.Bytes();
+        }();
+        return bytes;
+    }
+
     const proto2225::BiomeDefinitionListPacket& BiomeDefinitions() {
         static const proto2225::BiomeDefinitionListPacket packet = [] {
             proto2225::BiomeDefinitionListPacket p;

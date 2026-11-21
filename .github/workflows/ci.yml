@@ -255,10 +255,10 @@ jobs:
           ls -l pkg
 
       - name: Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: perlite-${{ matrix.name }}
           path: pkg/perlite-${{ matrix.name }}.zip
+          archive: false
           if-no-files-found: error
 
       - name: Smoke test
@@ -311,10 +311,10 @@ jobs:
           key: deps-${{ env.DEPS_CACHE_VERSION }}-freebsd-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'tests/CMakeLists.txt') }}
 
       - name: Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: perlite-freebsd-x64
           path: pkg/perlite-freebsd-x64.zip
+          archive: false
           if-no-files-found: error
 
   release:
@@ -324,7 +324,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: pkg
           pattern: perlite-*

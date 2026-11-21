@@ -240,6 +240,11 @@ namespace perlite {
     }
 
     void Session::SendStartGame() {
+        {
+            proto::JigsawStructureDataPacket jigsaw;
+            jigsaw.structureData.bytes = serverdata::JigsawStructureDataNbt();
+            Send(jigsaw);
+        }
         const ServerConfig& cfg = server.Config();
         proto::StartGamePacket g;
         g.entityId = static_cast<int64_t>(runtimeId);

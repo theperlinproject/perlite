@@ -16,6 +16,7 @@ namespace perlite::serverdata {
 
     const std::vector<EntityType>& EntityTypes();
     const std::vector<uint8_t>& EntityIdentifiersNbt();
+    const std::vector<uint8_t>& JigsawStructureDataNbt();
     const proto2225::BiomeDefinitionListPacket& BiomeDefinitions();
     int32_t LegacyEntityId(const std::string& identifier);
 }
