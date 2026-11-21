@@ -342,18 +342,28 @@ namespace perlite::net {
         return &variant.template emplace<I>();
     }
     template <size_t I, class V> auto* PickAt(WriteStream& s, V& variant) {
-        auto* value = std::get_if<I>(&variant);
-        if (!value)
-            s.ok = false;
-        return value;
+        using T = std::variant_alternative_t<I, V>;
+        if (auto* value = std::get_if<I>(&variant))
+            return value;
+        if constexpr (std::is_same_v<std::variant_alternative_t<0, V>, std::monostate>) {
+            if (variant.index() == 0) {
+                thread_local T fallback{};
+                fallback = T{};
+                return &fallback;
+            }
+        }
+        s.ok = false;
+        return static_cast<T*>(nullptr);
     }
     template <class T> T* Pick(ReadStream&, std::optional<T>& slot) {
         return &slot.emplace();
     }
-    template <class T> T* Pick(WriteStream& s, std::optional<T>& slot) {
-        if (!slot)
-            s.ok = false;
-        return slot ? &*slot : nullptr;
+    template <class T> T* Pick(WriteStream&, std::optional<T>& slot) {
+        if (slot)
+            return &*slot;
+        thread_local T fallback{};
+        fallback = T{};
+        return &fallback;
     }
 
     template <class T> bool Present(ReadStream& s, std::optional<T>& slot) {

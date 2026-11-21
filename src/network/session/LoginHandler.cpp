@@ -245,6 +245,7 @@ namespace perlite {
             jigsaw.structureData.bytes = serverdata::JigsawStructureDataNbt();
             Send(jigsaw);
         }
+        Send(proto::VoxelShapesPacket{});
         const ServerConfig& cfg = server.Config();
         proto::StartGamePacket g;
         g.entityId = static_cast<int64_t>(runtimeId);
@@ -276,11 +277,12 @@ namespace perlite {
             cfg.chatRestriction == "Disabled"  ? proto::StartGamePacketChatRestrictionLevel::Disabled
             : cfg.chatRestriction == "Dropped" ? proto::StartGamePacketChatRestrictionLevel::Dropped
                                                : proto::StartGamePacketChatRestrictionLevel::None;
-        g.gameVersion = "*";
+        g.gameVersion = kGameVersion;
         g.levelId = cfg.levelName;
         g.worldName = cfg.name;
         g.currentTick = static_cast<int64_t>(server.TickCount());
-        g.multiplayerCorrelationId = "perlite-" + std::to_string(runtimeId);
+        g.multiplayerCorrelationId = "";
+        g.rewindHistorySize = 40;
         g.serverAuthoritativeInventory = true;
         g.engine = "Perlite";
         g.blockNetworkIdsAreHashes = true;
@@ -289,11 +291,10 @@ namespace perlite {
     }
 
     void Session::SendWorldSetup() {
+        proto::SetTimePacket t;
+        t.time = static_cast<int32_t>(server.DayTime() % 2147483647);
+        Send(t);
         Queue(proto::ItemRegistryPacket::kId, server.ItemRegistryBody());
-        Queue(proto::CreativeContentPacket::kId, server.CreativeContentBody());
-        if (!Recipes::Instance().CraftingDataBody().empty())
-            Queue(proto::CraftingDataPacket::kId, Recipes::Instance().CraftingDataBody());
-        Send(serverdata::BiomeDefinitions());
         {
             proto::AvailableEntityIdentifiersPacket ids;
             ids.nbt.bytes = serverdata::EntityIdentifiersNbt();
@@ -301,6 +302,9 @@ namespace perlite {
         }
         Send(proto::CameraPresetsPacket{});
         Send(proto::TrimDataPacket{});
+        Send(serverdata::BiomeDefinitions());
+        SendAttributes();
+        SendAbilities();
         {
             proto::SetDifficultyPacket difficulty;
             difficulty.difficulty = static_cast<uint32_t>(server.Config().difficulty);
@@ -309,11 +313,10 @@ namespace perlite {
             commandsOn.enabled = true;
             Send(commandsOn);
         }
-
-        proto::SetTimePacket t;
-        t.time = static_cast<int32_t>(server.DayTime() % 2147483647);
-        Send(t);
-
+        SendInventory();
+        Queue(proto::CreativeContentPacket::kId, server.CreativeContentBody());
+        if (!Recipes::Instance().CraftingDataBody().empty())
+            Queue(proto::CraftingDataPacket::kId, Recipes::Instance().CraftingDataBody());
         {
             proto::PlayerListPacket self;
             proto::PlayerRecord rec;
@@ -329,9 +332,6 @@ namespace perlite {
             Send(self);
         }
         SendCommands();
-        SendAbilities();
-        SendAttributes();
-        SendInventory();
     }
 
     void Session::SendCommands() {
