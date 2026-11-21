@@ -117,7 +117,28 @@ namespace perlite {
     }
 
     void Session::Dispatch(uint32_t id, std::span<const uint8_t> body) {
+        const std::string who = name.empty() ? connection->Describe() : name;
+        if (server.Config().debugLogPackets && state != State::InGame)
+            LogInfo(who + " -> packet " + std::to_string(id) + " (" + std::to_string(body.size()) + " bytes)");
         switch (id) {
+        case proto::PacketViolationWarningPacket::kId: {
+            // The client could not read a packet we sent; it names the packet and the reason.
+            proto::PacketViolationWarningPacket w;
+            if (Decode(body, w))
+                LogWarn(who + ": client rejected packet " + std::to_string(w.packetId) + " (type " +
+                        std::to_string(static_cast<int>(w.violationType)) + ", severity " +
+                        std::to_string(static_cast<int>(w.severity)) + "): " + w.reason);
+            else
+                LogWarn(who + ": client sent a packet violation warning");
+            break;
+        }
+        case proto::DisconnectPacket::kId: {
+            proto::DisconnectPacket d;
+            if (Decode(body, d))
+                LogInfo(who + " disconnected: reason " + std::to_string(static_cast<int>(d.reason)) +
+                        (d.message.empty() ? std::string() : " \"" + d.message + "\""));
+            break;
+        }
         case proto::RequestNetworkSettingsPacket::kId:
             OnRequestSettings(body);
             break;
