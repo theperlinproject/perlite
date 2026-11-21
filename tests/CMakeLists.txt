@@ -1,0 +1,52 @@
+find_program(PERLITE_WASM_CLANG clang)
+set(PERLITE_TEST_PLUGIN "${CMAKE_CURRENT_BINARY_DIR}/hello_server.wasm")
+add_custom_command(OUTPUT "${PERLITE_TEST_PLUGIN}"
+    COMMAND ${CMAKE_COMMAND} -E env "PERLIN_API_SDK=${PERLIN_API_SDK_DIR}"
+            sh "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hello_server/build.sh" "${PERLITE_TEST_PLUGIN}"
+    DEPENDS fixtures/hello_server/hello_server.c fixtures/hello_server/build.sh
+            ${PERLIN_API_SDK_DIR}/perlin.h ${PERLIN_API_SDK_DIR}/perlin_abi.h
+    COMMENT "Building the test plugin" VERBATIM)
+add_custom_target(perlite_test_plugin DEPENDS "${PERLITE_TEST_PLUGIN}")
+
+set(PERLITE_TEST_SUPPORT support/ChunkCodec.cpp)
+
+function(perlite_test name)
+    cmake_parse_arguments(PARSE_ARGV 1 T "NO_RUN" "" "SOURCES;ARGS;LIBS")
+    add_executable(${name} ${name}.cpp ${T_SOURCES})
+    target_include_directories(${name} PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}"
+        ${PERLIN_API_INCLUDE_DIRS})
+    target_link_libraries(${name} PRIVATE perlite_core perlite_protocol miniz OpenSSL::Crypto OpenSSL::SSL Threads::Threads ${T_LIBS})
+    if(NOT T_NO_RUN)
+        add_test(NAME ${name} COMMAND ${name} ${T_ARGS})
+        set_tests_properties(${name} PROPERTIES ENVIRONMENT "PERLITE_DATA=${PROJECT_SOURCE_DIR}/data")
+    endif()
+endfunction()
+
+perlite_test(vanilla_noise_test)
+perlite_test(vanilla_terrain_test)
+perlite_test(vanilla_terrain_bench NO_RUN)
+perlite_test(vanilla_chunk_dump NO_RUN)
+perlite_test(vanilla_density_test ARGS "${PROJECT_SOURCE_DIR}/tools/javaref/reference_seed12345.txt")
+perlite_test(vanilla_biome_test ARGS "${PROJECT_SOURCE_DIR}/tools/javaref/biome_lookup_ref.txt")
+perlite_test(vanilla_decoration_test ARGS "${PROJECT_SOURCE_DIR}/data")
+perlite_test(vanilla_features_test)
+perlite_test(vanilla_gpu_test)
+if(PERLITE_WASM_CLANG)
+    perlite_test(server_selftest SOURCES ${PERLITE_TEST_SUPPORT} ARGS "${PERLITE_TEST_PLUGIN}")
+    add_dependencies(server_selftest perlite_test_plugin)
+    perlite_test(server_session_test SOURCES ${PERLITE_TEST_SUPPORT} ARGS "${PERLITE_TEST_PLUGIN}")
+    add_dependencies(server_session_test perlite_test_plugin)
+else()
+    message(STATUS "perlite: no clang for the wasm test plugin; server_selftest and server_session_test are skipped")
+endif()
+perlite_test(server_embed_test SOURCES support/EmbeddedServer.cpp)
+target_compile_definitions(server_embed_test PRIVATE PERLITE_STATIC)
+perlite_test(server_capi_test)
+perlite_test(server_storage_test SOURCES ${PERLITE_TEST_SUPPORT})
+perlite_test(server_login_test SOURCES ${PERLITE_TEST_SUPPORT})
+if(PERLITE_NETHERNET)
+    perlite_test(server_nethernet_test LIBS ${PERLITE_DATACHANNEL})
+endif()
+if(PERLITE_GPU)
+    perlite_test(server_gpu_test)
+endif()
