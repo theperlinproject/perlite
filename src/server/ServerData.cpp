@@ -331,6 +331,7 @@ namespace perlite::serverdata {
                 w.PutString("id", t.id);
                 w.PutInt("rid", t.legacyId);
                 w.PutByte("summonable", t.summonable ? 1 : 0);
+                w.PutByte("experimental", 0);
                 w.EndCompound();
             }
             w.EndCompound();

@@ -56,6 +56,8 @@ namespace perlite {
         uint16_t udpPublicBegin = 0, udpPublicEnd = 0;
         uint16_t portV6 = 19133;
         uint32_t tickDistance = 4;
+        std::vector<uint32_t> debugSkipPackets;
+        bool debugLogPackets = false;
         uint32_t idleTimeoutMinutes = 30;
         uint32_t maxThreads = 8;
         std::string defaultPermission = "member";

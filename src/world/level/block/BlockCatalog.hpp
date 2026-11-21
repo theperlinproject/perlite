@@ -39,6 +39,23 @@ namespace perlite {
 
         uint16_t RegistryId(int32_t hash) const;
 
+        void SetCreativeEntries(std::vector<int16_t> networkIds) { creativeEntries = std::move(networkIds); }
+        const CatalogItem* CreativeEntry(uint32_t entryId) const {
+            if (creativeEntries.empty())
+                return ItemById(static_cast<int16_t>(entryId));
+            if (entryId == 0 || entryId > creativeEntries.size())
+                return nullptr;
+            return ItemById(creativeEntries[entryId - 1]);
+        }
+        uint32_t CreativeEntryOf(int16_t networkId) const {
+            if (creativeEntries.empty())
+                return static_cast<uint32_t>(static_cast<uint16_t>(networkId));
+            for (size_t i = 0; i < creativeEntries.size(); i++)
+                if (creativeEntries[i] == networkId)
+                    return static_cast<uint32_t>(i + 1);
+            return 0;
+        }
+
         uint16_t DefaultBlock(const std::string& name) const;
         uint16_t Resolve(std::string_view state) const;
         std::string StateText(uint16_t id) const;
@@ -57,6 +74,7 @@ namespace perlite {
                         const std::unordered_map<std::string, int32_t>& defaultHash);
         std::unordered_map<int32_t, State> states;
         std::vector<CatalogItem> items;
+        std::vector<int16_t> creativeEntries;
         std::unordered_map<std::string, int32_t> defaultByName;
         std::unordered_map<int16_t, size_t> byId;
         std::unordered_map<int32_t, size_t> byHash;

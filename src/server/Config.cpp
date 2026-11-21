@@ -449,6 +449,20 @@ namespace perlite {
             return number(viewDistance, 2, 64);
         if (key == "tick-distance")
             return number(tickDistance, 4, 12);
+        if (key == "debug-log-packets")
+            return boolean(debugLogPackets);
+        if (key == "debug-skip-packets") {
+            debugSkipPackets.clear();
+            size_t start = 0;
+            while (start <= v.size()) {
+                const size_t comma = std::min(v.find(',', start), v.size());
+                const std::string part = v.substr(start, comma - start);
+                if (part.find_first_not_of(" ") != std::string::npos && part.find_first_not_of("0123456789 ") == std::string::npos)
+                    debugSkipPackets.push_back(static_cast<uint32_t>(std::stoul(part)));
+                start = comma + 1;
+            }
+            return true;
+        }
         if (key == "player-idle-timeout")
             return number(idleTimeoutMinutes, 0, 1000000);
         if (key == "max-threads")

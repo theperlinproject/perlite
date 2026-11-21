@@ -437,7 +437,7 @@ static void TestInventory() {
     p::ItemStackRequest r;
     r.requestId = -1;
     auto craft = Act(T::CraftCreative, C::HotbarAndInventory, 0, C::HotbarAndInventory, 0, 0);
-    craft.itemId = static_cast<uint32_t>(stone->networkId);
+    craft.itemId = BlockCatalog::Instance().CreativeEntryOf(stone->networkId);
     r.actions = {craft, Act(T::Take, C::CreativeOutput, 50, C::Cursor, 0, 64),
                  Act(T::Place, C::Cursor, 0, C::HotbarAndInventory, 2, 40)};
     RequestResult res = ApplyStackRequest(inv, r, true);

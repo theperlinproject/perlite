@@ -371,7 +371,7 @@ int main(int argc, char** argv) {
         r.requestId = -1;
         proto::ItemStackRequestActionsEntry craft;
         craft.typeId = T::CraftCreative;
-        craft.itemId = static_cast<uint32_t>(stone->networkId);
+        craft.itemId = BlockCatalog::Instance().CreativeEntryOf(stone->networkId);
         craft.timesCrafted = 1;
         proto::ItemStackRequestActionsEntry take;
         take.typeId = T::Take;

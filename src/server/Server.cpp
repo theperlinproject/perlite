@@ -1288,13 +1288,17 @@ namespace perlite {
             }
         std::ranges::stable_sort(placed,
                          [&](const Placed& a, const Placed& b) { return remap[a.group] < remap[b.group]; });
+        std::vector<int16_t> entries;
+        entries.reserve(placed.size());
         for (const Placed& p : placed) {
             proto2225::CreativeContentPacketItemsEntry e;
-            e.entryId = static_cast<uint32_t>(p.legacy.networkId);
+            entries.push_back(static_cast<int16_t>(p.legacy.networkId));
+            e.entryId = static_cast<uint32_t>(entries.size());
             e.item = p.legacy;
             e.groupIndex = static_cast<uint32_t>(remap[p.group]);
             creative.items.push_back(std::move(e));
         }
+        BlockCatalog::Instance().SetCreativeEntries(std::move(entries));
         net::EncodeChecked(registry, itemRegistryBody);
         net::EncodeChecked(creative, creativeBody);
     }

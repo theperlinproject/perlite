@@ -10878,15 +10878,15 @@
                                               "10": "wildcard_target",
                                               "17": "file_path",
                                               "23": "integer_range",
-                                              "43": "equipment_slots",
-                                              "44": "string",
-                                              "52": "block_position",
-                                              "53": "position",
-                                              "55": "message",
-                                              "58": "raw_text",
-                                              "62": "json",
-                                              "71": "block_states",
-                                              "75": "command"
+                                              "47": "equipment_slots",
+                                              "56": "string",
+                                              "64": "block_position",
+                                              "65": "position",
+                                              "67": "message",
+                                              "70": "raw_text",
+                                              "74": "json",
+                                              "84": "block_states",
+                                              "87": "command"
                                             }
                                           }
                                         ]

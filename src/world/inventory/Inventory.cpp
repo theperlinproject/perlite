@@ -487,7 +487,7 @@ namespace perlite {
             case Action::CraftCreative: {
                 if (!creative)
                     return result;
-                const CatalogItem* item = BlockCatalog::Instance().ItemById(static_cast<int16_t>(a.itemId));
+                const CatalogItem* item = BlockCatalog::Instance().CreativeEntry(a.itemId);
                 if (!item)
                     return result;
                 work.output = work.MakeStack(item->networkId, MaxStack(item->networkId));

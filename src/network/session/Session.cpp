@@ -1,5 +1,7 @@
 #include "network/session/SessionInternal.hpp"
 
+#include <algorithm>
+
 namespace perlite {
     Session::Session(Server& server, std::shared_ptr<Connection> connection, uint64_t runtimeId)
         : server(server), connection(std::move(connection)), runtimeId(runtimeId),
@@ -19,6 +21,12 @@ namespace perlite {
     void Session::Queue(uint32_t id, const std::vector<uint8_t>& body) {
         if (state == State::Closed)
             return;
+        const ServerConfig& cfg = server.Config();
+        if (!cfg.debugSkipPackets.empty() &&
+            std::find(cfg.debugSkipPackets.begin(), cfg.debugSkipPackets.end(), id) != cfg.debugSkipPackets.end())
+            return;
+        if (cfg.debugLogPackets && state != State::InGame)
+            LogInfo(name + " <- packet " + std::to_string(id) + " (" + std::to_string(body.size()) + " bytes)");
         BatchCodec::AppendPacket(outgoing, id, body);
     }
 
