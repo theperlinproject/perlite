@@ -19,7 +19,7 @@ def package_dirs(root: Path | None) -> set[Path]:
     if not root or not root.is_dir():
         return set()
     return {version for package in root.iterdir() if package.is_dir() and not package.name.startswith("cpm")
-            for version in package.iterdir() if version.is_dir()}
+            for version in package.iterdir() if version.is_dir() and ".stale-" not in version.name}
 
 
 def remove_tree(d: Path) -> None:
@@ -36,7 +36,12 @@ def remove_tree(d: Path) -> None:
         if d.exists():
             time.sleep(2)
     if d.exists():
-        print(f"::warning::could not fully remove {d}")
+        aside = d.with_name(f"{d.name}.stale-{int(time.time())}")
+        try:
+            d.rename(aside)
+            print(f"::warning::could not fully remove {d}, moved it to {aside}")
+        except OSError:
+            print(f"::warning::could not fully remove {d}")
 
 
 def build_dir(args: list[str]) -> Path:

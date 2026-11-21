@@ -16,7 +16,7 @@ concurrency:
 
 env:
   CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
-  DEPS_CACHE_VERSION: v1
+  DEPS_CACHE_VERSION: v2
   OPENSSL_VERSION: openssl-3.0.15
   MACOS_DEPLOYMENT_TARGET: "12.0"
   CCACHE_BASEDIR: ${{ github.workspace }}
@@ -122,21 +122,23 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/winlibs
-          key: winlibs-${{ matrix.triplet }}-${{ env.OPENSSL_VERSION }}-v1
+          key: winlibs-${{ matrix.triplet }}-${{ env.OPENSSL_VERSION }}-v2
 
       - name: Install OpenSSL and zlib (Windows)
         if: runner.os == 'Windows' && steps.winlibs-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "openssl:${{ matrix.triplet }}" "zlib:${{ matrix.triplet }}" --x-install-root="$env:GITHUB_WORKSPACE/winlibs"
-          exit $LASTEXITCODE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem "$env:GITHUB_WORKSPACE/winlibs/${{ matrix.triplet }}/lib"
+          if (-not (Test-Path "$env:GITHUB_WORKSPACE/winlibs/${{ matrix.triplet }}/include/zlib.h")) { Write-Error "vcpkg did not install zlib.h"; exit 1 }
 
       - name: Save Windows libraries
         if: runner.os == 'Windows' && steps.winlibs-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/winlibs
-          key: winlibs-${{ matrix.triplet }}-${{ env.OPENSSL_VERSION }}-v1
+          key: winlibs-${{ matrix.triplet }}-${{ env.OPENSSL_VERSION }}-v2
 
       - name: Set up MSVC environment
         if: runner.os == 'Windows'
@@ -181,6 +183,7 @@ jobs:
             "-DCMAKE_C_COMPILER=$env:PERLITE_CLANG_CL" "-DCMAKE_CXX_COMPILER=$env:PERLITE_CLANG_CL" "-DCMAKE_LINKER=$env:PERLITE_LLD_LINK" `
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache `
             "-DOPENSSL_ROOT_DIR=$libs" "-DZLIB_ROOT=$libs" "-DCMAKE_PREFIX_PATH=$libs" `
+            "-DZLIB_INCLUDE_DIR=$libs/include" "-DZLIB_LIBRARY=$libs/lib/zlib.lib" `
             @cross
           exit $LASTEXITCODE
 
