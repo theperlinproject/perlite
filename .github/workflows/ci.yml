@@ -131,6 +131,7 @@ jobs:
           & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "openssl:${{ matrix.triplet }}" "zlib:${{ matrix.triplet }}" --x-install-root="$env:GITHUB_WORKSPACE/winlibs"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem "$env:GITHUB_WORKSPACE/winlibs/${{ matrix.triplet }}/lib"
+          if (-not (Get-ChildItem "$env:GITHUB_WORKSPACE/winlibs/${{ matrix.triplet }}/lib" -File | Where-Object { $_.Name -match '^(lib)?z(lib)?(s|static)?\.lib$' })) { Write-Error "vcpkg did not install a zlib library"; exit 1 }
           if (-not (Test-Path "$env:GITHUB_WORKSPACE/winlibs/${{ matrix.triplet }}/include/zlib.h")) { Write-Error "vcpkg did not install zlib.h"; exit 1 }
 
       - name: Save Windows libraries
@@ -173,6 +174,9 @@ jobs:
         shell: pwsh
         run: |
           $libs = "$env:GITHUB_WORKSPACE/winlibs/${{ matrix.triplet }}"
+          $zlib = Get-ChildItem "$libs/lib" -File | Where-Object { $_.Name -match '^(lib)?z(lib)?(s|static)?\.lib$' } | Select-Object -First 1
+          if (-not $zlib) { Write-Error "no zlib library in $libs/lib"; exit 1 }
+          Write-Host "zlib: $($zlib.FullName)"
           $cross = @()
           if ("${{ matrix.clang_target }}" -ne "") {
             $cross = @("-DCMAKE_SYSTEM_NAME=Windows", "-DCMAKE_SYSTEM_PROCESSOR=ARM64",
@@ -183,7 +187,7 @@ jobs:
             "-DCMAKE_C_COMPILER=$env:PERLITE_CLANG_CL" "-DCMAKE_CXX_COMPILER=$env:PERLITE_CLANG_CL" "-DCMAKE_LINKER=$env:PERLITE_LLD_LINK" `
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache `
             "-DOPENSSL_ROOT_DIR=$libs" "-DZLIB_ROOT=$libs" "-DCMAKE_PREFIX_PATH=$libs" `
-            "-DZLIB_INCLUDE_DIR=$libs/include" "-DZLIB_LIBRARY=$libs/lib/zlib.lib" `
+            "-DZLIB_INCLUDE_DIR=$libs/include" "-DZLIB_LIBRARY=$($zlib.FullName)" `
             @cross
           exit $LASTEXITCODE
 
