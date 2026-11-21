@@ -76,6 +76,7 @@ namespace perlite {
         rec.entityUniqueId = static_cast<int64_t>(other.runtimeId);
         rec.username = other.name;
         rec.xboxUserId = other.xuid;
+        rec.buildPlatform = other.buildPlatform;
         rec.skinData = other.GetSkin();
         rec.playerColor = -1;
         list.records.push_back(std::move(rec));
@@ -107,6 +108,7 @@ namespace perlite {
         proto::PlayerListPacket list;
         proto::PlayerRecord rec;
         rec.type = proto::PlayerRecordType::Remove;
+        rec.legacyType = 1; // the entry's own Action byte: Add = 0, Remove = 1
         rec.uuid.bytes = other.uuid;
         list.records.push_back(std::move(rec));
         Send(list);

@@ -277,6 +277,8 @@ namespace perlite {
 
         uint64_t runtimeId;
         std::string name, xuid;
+        // BuildPlatform from the client's DeviceOS; 0 is not a valid value, -1 means Unknown.
+        int32_t buildPlatform = -1;
         std::array<uint8_t, 16> uuid{};
         std::unique_ptr<proto2225::Skin> skin;
         bool isOperator = false;

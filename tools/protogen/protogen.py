@@ -82,22 +82,12 @@ class Decl:
         self.extra = []
 
 class Generator:
-    def __init__(self, spec, overrides):
+    def __init__(self, spec):
+        # The spec is used exactly as published; there is no override layer.
         self.types = dict(spec["types"])
-        for name, expr in overrides.get("types", {}).items():
-            self.types[name] = expr
-        for path, expr in overrides.get("retype", {}).items():
-            owner, field = path.split(".")
-            body = self.types[owner]
-            for entry in body[1]:
-                if entry.get("name") == field:
-                    entry["type"] = expr
-                    break
-            else:
-                raise GenError(f"retype target {path} not found")
-        self.custom = overrides.get("custom", {})
-        self.extra_packets = overrides.get("packets", {})
-        self.skip_types = set(overrides.get("skip", []))
+        self.custom = {}
+        self.extra_packets = {}
+        self.skip_types = set()
         self.decls = []
         self.names = set()
         self.memo = {}
@@ -812,8 +802,8 @@ def emit_codec(decl, bridged=False):
 class Generated:
     pass
 
-def generate(spec, overrides):
-    gen = Generator(spec, overrides)
+def generate(spec):
+    gen = Generator(spec)
     packets = build(gen)
     packet_decls = []
     registry = []
@@ -858,17 +848,6 @@ def generate(spec, overrides):
     g.by_packet = {d.packet[1]: d for d in packet_decls}
     g.mode = {name: mode for _, name, _, mode, _ in registry}
     return g
-
-def legacy_overrides(spec, overrides):
-    out = {}
-    retype = {}
-    for path, expr in overrides.get("retype", {}).items():
-        owner, field = path.split(".")
-        body = spec["types"].get(owner)
-        if isinstance(body, list) and body[0] == "container" and any(e.get("name") == field for e in body[1]):
-            retype[path] = expr
-    out["retype"] = retype
-    return out
 
 def expand(types, expr, memo, stack):
     if isinstance(expr, str):
@@ -1356,7 +1335,6 @@ ROOT = "perlite"
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec", required=True)
-    ap.add_argument("--overrides")
     ap.add_argument("--out", required=True)
     ap.add_argument("--parts", type=int, default=6)
     ap.add_argument("--legacy-parts", type=int, default=2)
@@ -1371,15 +1349,14 @@ def main():
     ROOT = opts.root_namespace
 
     spec = json.load(open(opts.spec))
-    overrides = json.load(open(opts.overrides)) if opts.overrides else {}
-    cur = generate(spec, overrides)
+    cur = generate(spec)
 
     legacies = []
     for item in opts.legacy:
         version, path = item.split("=", 1)
         version = int(version)
         lspec = json.load(open(path))
-        legacies.append((version, lspec, generate(lspec, legacy_overrides(lspec, overrides))))
+        legacies.append((version, lspec, generate(lspec)))
     legacies.sort(key=lambda x: x[0])
 
     cur_gen_types = cur.gen.types

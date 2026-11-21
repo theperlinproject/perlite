@@ -85,6 +85,16 @@ namespace perlite {
             name.resize(32);
         uuid = ParseUuid(uuidText, runtimeId);
         *skin = SkinFromClientData(haveClient ? clientData : json::Value{}, name);
+        {
+            // Mojang's BuildPlatform: Google 1, iOS 2, OSX 3, Amazon 4, Win32 8, Dedicated 9,
+            // Sony 11, Nintendo 12, Xbox 13, Linux 15, Unknown -1. Anything else is rejected.
+            const int64_t os = haveClient ? clientData["DeviceOS"].Int(-1) : -1;
+            static constexpr int32_t kValid[] = {1, 2, 3, 4, 8, 9, 11, 12, 13, 15, -1};
+            buildPlatform = -1;
+            for (int32_t v : kValid)
+                if (os == v)
+                    buildPlatform = v;
+        }
         isOperator = server.IsOperator(name, xuid);
         isVisitor =
             !server.Config().loopbackOnly && !isOperator && server.PermissionOf(name, xuid) == "visitor";
@@ -332,6 +342,7 @@ namespace perlite {
             rec.entityUniqueId = static_cast<int64_t>(runtimeId);
             rec.username = name;
             rec.xboxUserId = xuid;
+            rec.buildPlatform = buildPlatform;
             rec.skinData = *skin;
             rec.playerColor = -1;
             rec.isHost = false;
