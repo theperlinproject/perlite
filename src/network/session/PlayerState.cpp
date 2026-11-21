@@ -124,32 +124,38 @@ namespace perlite {
         proto::MetadataDictionaryEntry f;
         f.key = proto::MetadataDictionaryEntryKey::Flags;
         f.type = proto::MetadataDictionaryEntryType::Long;
+        f.legacyType = static_cast<uint8_t>(f.type); // DataItem Type byte, = index
         f.value.template emplace<1>(static_cast<int64_t>(flags));
         meta.push_back(f);
         proto::MetadataDictionaryEntry a;
         a.key = proto::MetadataDictionaryEntryKey::Air;
         a.type = proto::MetadataDictionaryEntryType::Short;
+        a.legacyType = static_cast<uint8_t>(a.type); // DataItem Type byte, = index
         a.value.template emplace<4>().template emplace<2>(static_cast<int16_t>(std::clamp(air, -20, 300)));
         meta.push_back(a);
         proto::MetadataDictionaryEntry m;
         m.key = proto::MetadataDictionaryEntryKey::MaxAirdataMaxAir;
         m.type = proto::MetadataDictionaryEntryType::Short;
+        m.legacyType = static_cast<uint8_t>(m.type); // DataItem Type byte, = index
         m.value.template emplace<4>().template emplace<2>(static_cast<int16_t>(300));
         meta.push_back(m);
         proto::MetadataDictionaryEntry flags2;
         flags2.key = proto::MetadataDictionaryEntryKey::FlagsExtended;
         flags2.type = proto::MetadataDictionaryEntryType::Long;
+        flags2.legacyType = static_cast<uint8_t>(flags2.type); // DataItem Type byte, = index
         flags2.value.template emplace<1>(
             static_cast<int64_t>(sleeping ? proto::FlagsMetadataFlags2::Sleeping : 0ull));
         meta.push_back(flags2);
         proto::MetadataDictionaryEntry pf;
         pf.key = proto::MetadataDictionaryEntryKey::PlayerFlags;
         pf.type = proto::MetadataDictionaryEntryType::Byte;
+        pf.legacyType = static_cast<uint8_t>(pf.type); // DataItem Type byte, = index
         pf.value.template emplace<4>().template emplace<1>(static_cast<int8_t>(sleeping ? 2 : 0));
         meta.push_back(pf);
         proto::MetadataDictionaryEntry bed;
         bed.key = proto::MetadataDictionaryEntryKey::PlayerBedPosition;
         bed.type = proto::MetadataDictionaryEntryType::Vec3I;
+        bed.legacyType = static_cast<uint8_t>(bed.type); // DataItem Type byte, = index
         bed.value.template emplace<4>().template emplace<7>(
             proto::Vec3I{sleeping ? bedX : 0, sleeping ? bedY : 0, sleeping ? bedZ : 0});
         meta.push_back(bed);

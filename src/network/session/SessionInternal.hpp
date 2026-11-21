@@ -280,6 +280,7 @@ namespace perlite {
             proto::MetadataDictionaryEntry e;
             e.key = key;
             e.type = proto::MetadataDictionaryEntryType::Float;
+            e.legacyType = static_cast<uint8_t>(e.type); // DataItem Type byte, = index
             auto& inner = e.value.template emplace<4>();
             inner.template emplace<4>(value);
             return e;
@@ -289,6 +290,7 @@ namespace perlite {
             proto::MetadataDictionaryEntry e;
             e.key = key;
             e.type = proto::MetadataDictionaryEntryType::Int;
+            e.legacyType = static_cast<uint8_t>(e.type); // DataItem Type byte, = index
             auto& inner = e.value.template emplace<4>();
             inner.template emplace<3>(value);
             return e;
@@ -305,6 +307,7 @@ namespace perlite {
             proto::MetadataDictionaryEntry flags;
             flags.key = proto::MetadataDictionaryEntryKey::Flags;
             flags.type = proto::MetadataDictionaryEntryType::Long;
+            flags.legacyType = static_cast<uint8_t>(flags.type); // DataItem Type byte, = index
             flags.value.template emplace<1>(static_cast<int64_t>(ActorManager::Flags(mob)));
             out.push_back(flags);
             const float scale = mob.baby ? 0.5f : 1.0f;
