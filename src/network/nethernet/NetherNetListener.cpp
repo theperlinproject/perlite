@@ -49,10 +49,6 @@ namespace perlite {
             return out;
         }
 
-        bool IsLoopback(const std::string& ip) {
-            return ip == "::1" || ip.starts_with("127.");
-        }
-
         class Peer final : public Connection, public std::enable_shared_from_this<Peer> {
         public:
             Peer(std::string remote, EventQueue& queue) : remote(std::move(remote)), queue(queue) {}

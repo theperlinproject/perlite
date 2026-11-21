@@ -9,11 +9,16 @@
 
 #include "support/MiniHttp.hpp"
 #include "network/nethernet/LanDiscovery.hpp"
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 #include <rtc/rtc.hpp>
 
 #include <openssl/bn.h>
@@ -173,36 +178,56 @@ namespace {
 
     // A stand-in for a Bedrock client on the LAN: broadcasts discovery and signals over UDP 7551.
     struct LanClient {
-        int sock = -1;
+#ifdef _WIN32
+        using Socket = SOCKET;
+        static int Poll(Socket s, int ms) {
+            WSAPOLLFD p{};
+            p.fd = s;
+            p.events = POLLRDNORM;
+            return WSAPoll(&p, 1, ms);
+        }
+        static void CloseSocket(Socket s) { closesocket(s); }
+#else
+        using Socket = int;
+        static int Poll(Socket s, int ms) {
+            pollfd p{s, POLLIN, 0};
+            return ::poll(&p, 1, ms);
+        }
+        static void CloseSocket(Socket s) { ::close(s); }
+#endif
+        Socket sock{};
         uint64_t id = 0x1122334455667788ull;
         uint64_t server = 0;
         std::string serverData;
         LanClient() {
+#ifdef _WIN32
+            WSADATA wsa;
+            WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
             sock = ::socket(AF_INET, SOCK_DGRAM, 0);
             sockaddr_in a{};
             a.sin_family = AF_INET;
             a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             ::bind(sock, reinterpret_cast<sockaddr*>(&a), sizeof(a));
         }
-        ~LanClient() { ::close(sock); }
+        ~LanClient() { CloseSocket(sock); }
         void Send(uint16_t type, const std::string& body) {
             const std::string d = lan::Encode(type, id, body);
             sockaddr_in to{};
             to.sin_family = AF_INET;
             to.sin_port = htons(lan::kPort);
             to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-            ::sendto(sock, d.data(), d.size(), 0, reinterpret_cast<sockaddr*>(&to), sizeof(to));
+            ::sendto(sock, d.data(), static_cast<int>(d.size()), 0, reinterpret_cast<sockaddr*>(&to), sizeof(to));
         }
         void Signal(const std::string& text) { Send(lan::kMessage, lan::MessageBody(server, text)); }
         // Next packet from the server, or false after timeoutMs.
         bool Receive(uint16_t& type, std::string& body, int timeoutMs) {
-            pollfd p{sock, POLLIN, 0};
             std::string buf(65536, '\0');
             const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
             while (std::chrono::steady_clock::now() < end) {
-                if (::poll(&p, 1, 50) <= 0)
+                if (Poll(sock, 50) <= 0)
                     continue;
-                const ssize_t n = ::recv(sock, buf.data(), buf.size(), 0);
+                const int n = static_cast<int>(::recv(sock, buf.data(), static_cast<int>(buf.size()), 0));
                 uint64_t sender = 0;
                 if (n > 0 && lan::Decode(buf.substr(0, static_cast<size_t>(n)), type, sender, body) && sender != id) {
                     server = sender;

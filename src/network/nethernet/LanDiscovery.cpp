@@ -2,6 +2,7 @@
 
 #include "common/Log.hpp"
 
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <openssl/sha.h>

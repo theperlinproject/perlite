@@ -4,6 +4,7 @@
 #include <openssl/core_names.h>
 #include <openssl/ecdsa.h>
 #include <openssl/evp.h>
+#include <openssl/bio.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 
@@ -116,9 +117,10 @@ namespace perlite::nethernet {
     bool ServerIdentity::LoadOrCreate(const std::string& path, std::string& note) {
         if (path.empty())
             return Valid();
-        if (FILE* f = std::fopen(path.c_str(), "rb")) {
-            EVP_PKEY* loaded = PEM_read_PrivateKey(f, nullptr, nullptr, nullptr);
-            std::fclose(f);
+        // BIO file I/O rather than FILE*: OpenSSL on Windows cannot share a FILE* across CRTs.
+        if (BIO* in = std::filesystem::exists(path) ? BIO_new_file(path.c_str(), "rb") : nullptr) {
+            EVP_PKEY* loaded = PEM_read_bio_PrivateKey(in, nullptr, nullptr, nullptr);
+            BIO_free(in);
             if (loaded && EVP_PKEY_is_a(loaded, "EC") && EVP_PKEY_get_bits(loaded) == 384) {
                 Adopt(loaded);
                 if (Valid()) {
@@ -136,9 +138,9 @@ namespace perlite::nethernet {
             return false;
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-        if (FILE* f = std::fopen(path.c_str(), "wb")) {
-            const bool ok = PEM_write_PrivateKey(f, impl->key, nullptr, nullptr, 0, nullptr, nullptr) == 1;
-            std::fclose(f);
+        if (BIO* out = BIO_new_file(path.c_str(), "wb")) {
+            const bool ok = PEM_write_bio_PrivateKey(out, impl->key, nullptr, nullptr, 0, nullptr, nullptr) == 1;
+            BIO_free(out);
 #ifndef _WIN32
             std::filesystem::permissions(path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
                                          ec);
