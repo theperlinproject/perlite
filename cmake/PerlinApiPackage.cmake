@@ -6,13 +6,12 @@ if(NOT perlin_api_SOURCE_DIR)
     if(PERLIN_API_SOURCE_DIR)
         get_filename_component(perlin_api_SOURCE_DIR "${PERLIN_API_SOURCE_DIR}" ABSOLUTE)
     else()
-        include(FetchContent)
-        FetchContent_Declare(perlin_api
-            GIT_REPOSITORY https://github.com/theperlinproject/perlin-api.git
+        include(CPM)
+        CPMAddPackage(NAME perlin_api
+            GITHUB_REPOSITORY theperlinproject/perlin-api
             GIT_TAG ${PERLIN_API_TAG}
             GIT_SHALLOW TRUE
-            SOURCE_SUBDIR no-cmake-project)
-        FetchContent_MakeAvailable(perlin_api)
+            DOWNLOAD_ONLY YES)
     endif()
 endif()
 message(STATUS "perlite: perlin-api at ${perlin_api_SOURCE_DIR}")

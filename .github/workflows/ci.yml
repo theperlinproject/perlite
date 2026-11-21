@@ -1,46 +1,328 @@
-name: CI
+name: Build
 
 on:
   push:
+    branches: [main]
+    tags: ["v*"]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+  DEPS_CACHE_VERSION: v1
+  OPENSSL_VERSION: openssl-3.0.15
+  MACOS_DEPLOYMENT_TARGET: "12.0"
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_NOHASHDIR: "true"
+  CCACHE_COMPRESS: "true"
+  CCACHE_COMPRESSLEVEL: "6"
 
 jobs:
-  build:
+  native:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14, windows-2022]
-    runs-on: ${{ matrix.os }}
+        include:
+          - name: windows-x64
+            os: windows-latest
+            triplet: x64-windows-static
+            msvc_arch: x64
+            test: true
+          - name: windows-arm64
+            os: windows-latest
+            triplet: arm64-windows-static
+            msvc_arch: amd64_arm64
+            clang_target: aarch64-pc-windows-msvc
+            test: false
+          - name: linux-x64
+            os: ubuntu-24.04
+            test: true
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            test: true
+          - name: macos-arm64
+            os: macos-15
+            test: true
+          - name: macos-x64
+            os: macos-15-intel
+            test: true
+
     steps:
       - uses: actions/checkout@v4
-      - name: Dependencies (Linux)
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore dependency cache
+        id: cpm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cpm-cache
+          key: deps-${{ env.DEPS_CACHE_VERSION }}-${{ matrix.name }}-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'tests/CMakeLists.txt') }}
+          restore-keys: deps-${{ env.DEPS_CACHE_VERSION }}-${{ matrix.name }}-
+
+      - name: Cache apt packages
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev zlib1g-dev clang lld
-      - name: Dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install ninja openssl@3
-      - name: Dependencies (Windows)
-        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: .apt-cache
+          key: apt-${{ matrix.name }}-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: apt-${{ matrix.name }}-
+
+      - name: Install Linux packages
+        if: runner.os == 'Linux'
         run: |
-          choco install ninja -y
-          vcpkg install openssl:x64-windows zlib:x64-windows
-      - uses: ilammy/msvc-dev-cmd@v1
+          mkdir -p .apt-cache/partial
+          sudo apt-get update || true
+          sudo apt-get install -y -o Dir::Cache::Archives="$PWD/.apt-cache" ninja-build pkg-config libssl-dev zlib1g-dev clang lld
+          sudo chown -R "$(id -u):$(id -g)" .apt-cache
+
+      - name: Select Xcode
+        if: runner.os == 'macOS'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.4"
+
+      - name: Install macOS packages
+        if: runner.os == 'macOS'
+        run: python -m pip install --upgrade ninja
+
+      - name: Cache OpenSSL (macOS)
+        if: runner.os == 'macOS'
+        id: openssl-mac-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/ossl-mac
+          key: openssl-mac12-${{ matrix.name }}-${{ env.OPENSSL_VERSION }}-v1
+
+      - name: Build OpenSSL for macOS 12 (static)
+        if: runner.os == 'macOS' && steps.openssl-mac-cache.outputs.cache-hit != 'true'
+        run: |
+          export MACOSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET"
+          git clone --depth 1 -b "$OPENSSL_VERSION" https://github.com/openssl/openssl openssl-src
+          cd openssl-src
+          if [ "$(uname -m)" = arm64 ]; then T=darwin64-arm64-cc; else T=darwin64-x86_64-cc; fi
+          ./Configure "$T" no-shared no-tests -mmacosx-version-min="$MACOS_DEPLOYMENT_TARGET" --prefix="$GITHUB_WORKSPACE/ossl-mac" --openssldir="$GITHUB_WORKSPACE/ossl-mac/ssl"
+          make -j"$(sysctl -n hw.ncpu)" build_libs
+          make install_dev
+
+      - name: Restore Windows libraries
         if: runner.os == 'Windows'
-      - name: Configure
+        id: winlibs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/winlibs
+          key: winlibs-${{ matrix.triplet }}-${{ env.OPENSSL_VERSION }}-v1
+
+      - name: Install OpenSSL and zlib (Windows)
+        if: runner.os == 'Windows' && steps.winlibs-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "openssl:${{ matrix.triplet }}" "zlib:${{ matrix.triplet }}" --x-install-root="$env:GITHUB_WORKSPACE/winlibs"
+          exit $LASTEXITCODE
+
+      - name: Save Windows libraries
+        if: runner.os == 'Windows' && steps.winlibs-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/winlibs
+          key: winlibs-${{ matrix.triplet }}-${{ env.OPENSSL_VERSION }}-v1
+
+      - name: Set up MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch }}
+
+      - name: Use the clang-cl that ships with Visual Studio
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $bin = Join-Path $vs "VC\Tools\Llvm\x64\bin"
+          if (Test-Path (Join-Path $bin "clang-cl.exe")) {
+            $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            "PERLITE_CLANG_CL=$bin\clang-cl.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            "PERLITE_LLD_LINK=$bin\lld-link.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            & (Join-Path $bin "clang-cl.exe") --version
+          } else {
+            "PERLITE_CLANG_CL=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            "PERLITE_LLD_LINK=lld-link" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.name }}
+          max-size: 500M
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $libs = "$env:GITHUB_WORKSPACE/winlibs/${{ matrix.triplet }}"
+          $cross = @()
+          if ("${{ matrix.clang_target }}" -ne "") {
+            $cross = @("-DCMAKE_SYSTEM_NAME=Windows", "-DCMAKE_SYSTEM_PROCESSOR=ARM64",
+                       "-DCMAKE_C_COMPILER_TARGET=${{ matrix.clang_target }}", "-DCMAKE_CXX_COMPILER_TARGET=${{ matrix.clang_target }}",
+                       "-DPERLITE_BUILD_TESTS=OFF")
+          }
+          python tools/ci/retry_configure.py -- cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_C_COMPILER=$env:PERLITE_CLANG_CL" "-DCMAKE_CXX_COMPILER=$env:PERLITE_CLANG_CL" "-DCMAKE_LINKER=$env:PERLITE_LLD_LINK" `
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache `
+            "-DOPENSSL_ROOT_DIR=$libs" "-DZLIB_ROOT=$libs" "-DCMAKE_PREFIX_PATH=$libs" `
+            @cross
+          exit $LASTEXITCODE
+
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          extra=""
-          if [ "$RUNNER_OS" = "macOS" ]; then extra="-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)"; fi
-          if [ "$RUNNER_OS" = "Windows" ]; then extra="-DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"; fi
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release $extra
-      - name: Build
-        run: cmake --build build
-      - name: Test
-        run: ctest --test-dir build --output-on-failure -E "perlin_api_"
-      - uses: actions/upload-artifact@v4
+          extra=()
+          if [ "$RUNNER_OS" = macOS ]; then
+            extra+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOS_DEPLOYMENT_TARGET" "-DOPENSSL_ROOT_DIR=$GITHUB_WORKSPACE/ossl-mac")
+          fi
+          python tools/ci/retry_configure.py -- cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache "${extra[@]}"
+
+      - name: Save dependency cache
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
         with:
-          name: perlite-${{ matrix.os }}
-          path: |
-            build/perlite
-            build/perlite.exe
-            data/
+          path: .cpm-cache
+          key: deps-${{ env.DEPS_CACHE_VERSION }}-${{ matrix.name }}-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'tests/CMakeLists.txt') }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: bash
+        run: |
+          cmake --install build --config Release --prefix dist
+          find dist \( -name '*.pdb' -o -name '*.ilk' -o -name '*.exp' \) -delete
+          du -sh dist
+
+      - name: Check the Windows executable architecture
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import struct
+          data = open("dist/perlite.exe", "rb").read(4096)
+          pe = struct.unpack_from("<I", data, 0x3C)[0]
+          machine = struct.unpack_from("<H", data, pe + 4)[0]
+          want = 0xAA64 if "${{ matrix.name }}" == "windows-arm64" else 0x8664
+          print(hex(machine))
+          assert machine == want, "wrong architecture"
+          PY
+
+      - name: Check the macOS binary only needs system libraries
+        if: runner.os == 'macOS'
+        run: |
+          otool -L dist/perlite
+          otool -l dist/perlite | grep -A4 LC_BUILD_VERSION
+          if otool -L dist/perlite | tail -n +2 | grep -Ev '^\s+(/usr/lib/|/System/Library/)'; then echo "::error::perlite links a non-system dylib"; exit 1; fi
+          codesign --force --sign - dist/perlite
+          [ -f dist/libperlite.dylib ] && codesign --force --sign - dist/libperlite.dylib || true
+
+      - name: Archive
+        shell: bash
+        run: |
+          mkdir -p pkg
+          out="$PWD/pkg/perlite-${{ matrix.name }}.zip"
+          case "$RUNNER_OS" in
+            macOS) (cd dist && ditto -c -k --sequesterRsrc . "$out") ;;
+            Windows) (cd dist && 7z a -tzip -bso0 "$out" .) ;;
+            *) (cd dist && zip -qry "$out" .) ;;
+          esac
+          ls -l pkg
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: perlite-${{ matrix.name }}
+          path: pkg/perlite-${{ matrix.name }}.zip
+          if-no-files-found: error
+
+      - name: Smoke test
+        if: matrix.test
+        shell: bash
+        run: dist/perlite --help
+
+      - name: Test
+        if: matrix.test
+        run: ctest --test-dir build -C Release --output-on-failure -E "perlin_api_" --timeout 600
+
+  freebsd:
+    name: freebsd-x64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore dependency cache
+        id: cpm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cpm-cache
+          key: deps-${{ env.DEPS_CACHE_VERSION }}-freebsd-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'tests/CMakeLists.txt') }}
+          restore-keys: deps-${{ env.DEPS_CACHE_VERSION }}-freebsd-
+
+      - name: Build in FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.3"
+          mem: 8192
+          envs: "CPM_SOURCE_CACHE"
+          usesh: true
+          prepare: |
+            pkg install -y cmake ninja git python3 zip
+          run: |
+            set -e
+            python3 tools/ci/retry_configure.py -- cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+            cmake --build build --parallel
+            cmake --install build --prefix dist
+            ctest --test-dir build --output-on-failure -E "perlin_api_" --timeout 600
+            mkdir -p pkg
+            (cd dist && zip -qry ../pkg/perlite-freebsd-x64.zip .)
+            ls -l pkg
+
+      - name: Save dependency cache
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cpm-cache
+          key: deps-${{ env.DEPS_CACHE_VERSION }}-freebsd-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'tests/CMakeLists.txt') }}
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: perlite-freebsd-x64
+          path: pkg/perlite-freebsd-x64.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [native, freebsd]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: pkg
+          pattern: perlite-*
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: pkg/*.zip
+          generate_release_notes: true

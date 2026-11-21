@@ -1,8 +1,22 @@
-find_program(PERLITE_WASM_CLANG clang)
+find_program(PERLITE_WASM_CLANG NAMES clang clang-19 clang-18)
+find_program(PERLITE_SH sh)
+if(PERLITE_WASM_CLANG AND PERLITE_SH)
+    set(_probe_dir "${CMAKE_CURRENT_BINARY_DIR}/wasm_probe")
+    file(MAKE_DIRECTORY "${_probe_dir}")
+    file(WRITE "${_probe_dir}/probe.c" "int probe(void) { return 1; }\n")
+    execute_process(COMMAND "${PERLITE_WASM_CLANG}" --target=wasm64 -nostdlib -Wl,--no-entry -Wl,--export-dynamic
+            -o "${_probe_dir}/probe.wasm" "${_probe_dir}/probe.c"
+        RESULT_VARIABLE _probe_result OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _probe_result EQUAL 0)
+        set(PERLITE_WASM_CLANG "")
+    endif()
+else()
+    set(PERLITE_WASM_CLANG "")
+endif()
 set(PERLITE_TEST_PLUGIN "${CMAKE_CURRENT_BINARY_DIR}/hello_server.wasm")
 add_custom_command(OUTPUT "${PERLITE_TEST_PLUGIN}"
-    COMMAND ${CMAKE_COMMAND} -E env "PERLIN_API_SDK=${PERLIN_API_SDK_DIR}"
-            sh "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hello_server/build.sh" "${PERLITE_TEST_PLUGIN}"
+    COMMAND ${CMAKE_COMMAND} -E env "PERLIN_API_SDK=${PERLIN_API_SDK_DIR}" "PERLITE_WASM_CC=${PERLITE_WASM_CLANG}"
+            "${PERLITE_SH}" "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hello_server/build.sh" "${PERLITE_TEST_PLUGIN}"
     DEPENDS fixtures/hello_server/hello_server.c fixtures/hello_server/build.sh
             ${PERLIN_API_SDK_DIR}/perlin.h ${PERLIN_API_SDK_DIR}/perlin_abi.h
     COMMENT "Building the test plugin" VERBATIM)

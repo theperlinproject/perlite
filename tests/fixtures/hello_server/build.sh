@@ -10,7 +10,7 @@ elif [ "$1" = "--wasm64" ]; then
     shift
 fi
 out=${1:-$here/hello_server.wasm}
-clang --target=$target -O2 -nostdlib -ffreestanding -fno-builtin -fvisibility=hidden \
+${PERLITE_WASM_CC:-clang} --target=$target -O2 -nostdlib -ffreestanding -fno-builtin -fvisibility=hidden \
   -Wl,--no-entry -Wl,--export-dynamic -Wl,--allow-undefined -Wl,-z,stack-size=65536 \
   -I "$sdk" -o "$out" "$here/hello_server.c"
 echo "built $out ($target)"
