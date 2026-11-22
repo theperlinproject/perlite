@@ -7,3 +7,10 @@ out/
 __pycache__/
 vanilla_behavior_pack/
 vanilla_behavior_pack.part/
+
+# Created by running the server or the tests from the source folder
+/worlds/
+/allowlist.json
+/permissions.json
+/nethernet-identity.pem
+/server.properties.bak

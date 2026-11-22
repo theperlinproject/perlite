@@ -34,6 +34,8 @@ static bool Near(float a, float b) {
 static void TestShippedProperties(const std::string& root) {
     std::string shipped;
     CHECK(file::Read(root + "/server.properties", shipped));
+    // A Windows checkout may turn the line endings into CRLF; the server reads either.
+    std::erase(shipped, '\r');
     // The file in the repository is exactly what a first start writes.
     CHECK(shipped == ServerConfig::FirstRun().PropertiesText());
     std::istringstream lines(shipped);

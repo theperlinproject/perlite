@@ -1,0 +1,14 @@
+# Text files keep LF line endings in every checkout, Windows included: the tests compare
+# server.properties and generated sources byte for byte.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.png binary
+*.jpg binary
+*.ico binary
+*.wasm binary
+*.zip binary
+*.gz binary
+*.ldb binary
+*.mcpack binary
