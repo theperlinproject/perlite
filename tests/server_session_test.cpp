@@ -4,6 +4,7 @@
 #include "common/Json.hpp"
 #include "server/commands/Commands.hpp"
 #include "server/Server.hpp"
+#include "network/session/Session.hpp"
 #include "world/crafting/Recipes.hpp"
 #include "world/level/block/BlockCatalog.hpp"
 #include "network/Batch.hpp"
@@ -1125,6 +1126,10 @@ int main(int argc, char** argv) {
         survival.Stop();
     }
     fs::remove_all(plugins);
+    if (const int bad = Session::MalformedSends().load(); bad != 0) {
+        std::fprintf(stderr, "server refused to send %d malformed packet(s)\n", bad);
+        g_failed++;
+    }
     if (g_failed) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failed);
         return 1;

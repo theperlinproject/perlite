@@ -324,6 +324,7 @@ namespace perlite {
         std::vector<uint8_t> body;
         if (!net::EncodeChecked(packet, body)) {
             LogWarn(std::string("refusing to send malformed ") + P::kName);
+            MalformedSends()++;
             return;
         }
         Queue(P::kId, body);

@@ -143,8 +143,11 @@ namespace perlite {
         flags2.key = proto::MetadataDictionaryEntryKey::FlagsExtended;
         flags2.type = proto::MetadataDictionaryEntryType::Long;
         flags2.legacyType = static_cast<uint8_t>(flags2.type); // DataItem Type byte, = index
-        flags2.value.template emplace<1>(
-            static_cast<int64_t>(sleeping ? proto::FlagsMetadataFlags2::Sleeping : 0ull));
+        // Bedrock numbers actor flags as one list; flags 64 and up live in the extended field at
+        // bit (flag - 64). Sleeping is flag 76. (The spec's second flag list drops laying_down, flag
+        // 64, so its generated constants sit one bit low.) The extended field is variant slot 2.
+        constexpr uint64_t kSleepingExtended = 1ull << (76 - 64);
+        flags2.value.template emplace<2>(static_cast<int64_t>(sleeping ? kSleepingExtended : 0ull));
         meta.push_back(flags2);
         proto::MetadataDictionaryEntry pf;
         pf.key = proto::MetadataDictionaryEntryKey::PlayerFlags;

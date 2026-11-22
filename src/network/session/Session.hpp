@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include "protocol/NbtTree.hpp"
 #include "network/PacketCipher.hpp"
 #include "world/inventory/Inventory.hpp"
@@ -28,6 +29,11 @@ namespace perlite {
 
     class Session {
     public:
+        // Packets the encoder refused (a field that does not match the protocol). Tests assert 0.
+        static std::atomic<int>& MalformedSends() {
+            static std::atomic<int> count{0};
+            return count;
+        }
         enum class State : uint8_t {
             AwaitSettings,
             AwaitLogin,

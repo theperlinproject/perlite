@@ -21,7 +21,7 @@ ctest --test-dir build
 
 | Option | Default | What it does |
 |--------|---------|--------------|
-| `PERLITE_NETHERNET` | ON | NetherNet transport (WebRTC). Bedrock 1.26 clients join over NetherNet. |
+| `PERLITE_NETHERNET` | ON | NetherNet transport (WebRTC), the only way Bedrock 26.60+ clients join. Without it only in-process (loopback) connections work. |
 | `PERLITE_LEVELDB` | ON (OFF on the web) | Save worlds in the Bedrock LevelDB format. |
 | `PERLITE_GPU` | OFF | Generate terrain on the GPU through conduit. |
 | `PERLITE_EMBED` | OFF | Build `perlite_embed`, the server without a wasm runtime, for hosts that bring their own. |
@@ -35,7 +35,8 @@ On the first start in a terminal, a short setup wizard asks for the server name,
 
 | Key | Default | |
 |-----|---------|---|
-| `transport` | `nethernet` | `nethernet` (what current clients use), `raknet` (older clients and LAN tools), or `both` (RakNet on the game port, WebRTC on port + 2). |
+| `transport` | `nethernet` | Always `nethernet`, the only transport Bedrock 26.60+ clients speak. RakNet was removed; `raknet` and `both` load as `nethernet` with a warning. |
+| `enable-lan-visibility` | `true` | Answer NetherNet LAN discovery on UDP 7551 so the server shows under Friends > LAN Games and can be joined from there. |
 | `network-encryption` | `true` | The encryption handshake on every non-local login. Over NetherNet the handshake is sent but the stream stays plain, as Bedrock Dedicated Server does, since DTLS already encrypts it. |
 | `texturepack-required` | `false` | Players must accept the server's packs. |
 | `enable-packet-rate-limiter` | `true` | Drops clients that flood the server with packets. |
@@ -44,6 +45,14 @@ On the first start in a terminal, a short setup wizard asks for the server name,
 | `perlite-generator` | `vanilla` | `vanilla` or `flat`. |
 | `perlite-terrain-backend` | `auto` | `cpu`, `gpu` or `auto`. |
 | `perlite-plugin-dir`, `perlite-block-data-dir`, `perlite-flat-layers`, `perlite-ice-servers`, `perlite-ice-bind-address`, `perlite-auth-root-keys` | | Same as before the split; the old `perlin-*` spellings still load. |
+
+### Ports and joining
+
+Players join with the server's address and `server-port` (19132 by default): the client first sends an HTTP request over **TCP** to that port, then plays over **UDP** on `server-udp-ports` (also 19132 by default). Open both TCP and UDP for that port in your firewall and router. LAN discovery uses **UDP 7551** broadcasts, so it only works on the same subnet.
+
+Connect to `127.0.0.1` or the machine's LAN address (for example `192.168.1.20`), never `0.0.0.0`: that is a "listen on every interface" address for `server-ip`, not one a client can reach.
+
+The server's NetherNet identity key lives in `nethernet-identity.pem` in the data folder. Keep it: a new key makes every player confirm the server again on their next join.
 
 Other files in the data folder: `allowlist.json`, `permissions.json`, `banned-players.json`, `banned-ips.json`, `plugins/`, `resource_packs/` and `behavior_packs/` (folders, `.zip` or `.mcpack`, with an optional `<pack>.key` holding the content key).
 

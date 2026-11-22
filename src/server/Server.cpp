@@ -742,7 +742,7 @@ namespace perlite {
     }
 
     void Server::OnPlayerJoined(Session& joined) {
-        LogInfo(joined.Name() + " joined (" + joined.Conn().Describe() + ")");
+        LogInfo(joined.Name() + " joined the game (" + joined.Conn().Describe() + ")");
         for (Session* other : PlayersIn(joined.DimensionId())) {
             if (other == &joined)
                 continue;
@@ -759,7 +759,9 @@ namespace perlite {
             mobWorld->Show(joined);
         SendWorldState(joined);
         plugins->Dispatch<abi::Event::PlayerJoin>({joined.Id(), joined.Name()});
-        Broadcast("§e" + joined.Name() + " joined the game");
+        // Already logged above with the address; tell the players without a second console line.
+        for (Session* s : InGamePlayers())
+            s->SendRaw("§e" + joined.Name() + " joined the game");
     }
 
     void Server::OnPlayerLeft(Session& left) {
