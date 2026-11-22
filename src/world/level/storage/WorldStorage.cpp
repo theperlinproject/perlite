@@ -2,6 +2,7 @@
 
 #include "common/Log.hpp"
 #include "world/level/block/Blocks.hpp"
+#include "world/level/levelgen/vanilla/VanillaSurface.hpp"
 
 #include <algorithm>
 #include <array>
@@ -155,8 +156,91 @@ namespace perlite {
         return db.Open((fs::path(worldDir) / "db").string(), error);
     }
 
+    WorldStorage::~WorldStorage() {
+        Close();
+    }
+
     void WorldStorage::Close() {
+        DrainSaves();
+        {
+            std::lock_guard lock(saveMutex);
+            saverStopping = true;
+        }
+        saveWake.notify_all();
+        if (saver.joinable())
+            saver.join();
         db.Close();
+    }
+
+    void WorldStorage::QueueChunk(int dimension, ChunkPos pos, std::shared_ptr<const ChunkColumn> column) {
+        if (!db.IsOpen() || !column)
+            return;
+        {
+            std::lock_guard lock(saveMutex);
+            const SaveKey key{dimension, pos.x, pos.z};
+            const bool queued = pendingSaves.contains(key);
+            pendingSaves[key] = std::move(column);
+            if (!queued)
+                saveQueue.push_back(key);
+            if (!saver.joinable()) {
+                saverStopping = false;
+                saver = std::thread([this] { SaverLoop(); });
+            }
+        }
+        saveWake.notify_one();
+    }
+
+    void WorldStorage::SaverLoop() {
+        std::vector<std::pair<SaveKey, std::shared_ptr<const ChunkColumn>>> written;
+        for (;;) {
+            SaveKey key;
+            std::shared_ptr<const ChunkColumn> column;
+            {
+                std::unique_lock lock(saveMutex);
+                if (saveQueue.empty() && !written.empty()) {
+                    // Commit what was written, then forget it: loads read it from the disk from now on.
+                    lock.unlock();
+                    db.Commit();
+                    lock.lock();
+                    for (auto& [k, c] : written)
+                        if (const auto it = pendingSaves.find(k); it != pendingSaves.end() && it->second == c)
+                            pendingSaves.erase(it);
+                    savesInFlight -= written.size();
+                    written.clear();
+                    saveIdle.notify_all();
+                    continue;
+                }
+                saveWake.wait(lock, [&] { return saverStopping || !saveQueue.empty(); });
+                if (saveQueue.empty())
+                    return;
+                key = saveQueue.front();
+                saveQueue.pop_front();
+                const auto it = pendingSaves.find(key);
+                if (it == pendingSaves.end())
+                    continue;
+                column = it->second;
+                savesInFlight++;
+            }
+            SaveChunk(std::get<0>(key), {std::get<1>(key), std::get<2>(key)}, *column);
+            written.emplace_back(key, std::move(column));
+            if (written.size() >= 64) {
+                db.Commit();
+                std::lock_guard lock(saveMutex);
+                for (auto& [k, c] : written)
+                    if (const auto it = pendingSaves.find(k); it != pendingSaves.end() && it->second == c)
+                        pendingSaves.erase(it);
+                savesInFlight -= written.size();
+                written.clear();
+                saveIdle.notify_all();
+            }
+        }
+    }
+
+    void WorldStorage::DrainSaves() {
+        std::unique_lock lock(saveMutex);
+        if (!saver.joinable())
+            return;
+        saveIdle.wait(lock, [&] { return saveQueue.empty() && savesInFlight == 0; });
     }
 
     bool WorldStorage::Flush(std::string* error) {
@@ -165,36 +249,44 @@ namespace perlite {
 
     void WorldStorage::EncodeSubChunk(const ChunkColumn& column, int section, int yIndex, std::string& out) {
         out.clear();
+        const auto* liquid = column.LiquidSection(section);
         out.push_back(static_cast<char>(kSubChunkFormat));
-        out.push_back(1);
+        out.push_back(liquid ? 2 : 1);
         out.push_back(static_cast<char>(static_cast<int8_t>(yIndex)));
-        std::vector<uint16_t> palette;
-        std::unordered_map<uint16_t, uint16_t> index;
-        std::array<uint16_t, kCells> indices{};
-        const ChunkColumn::Section& s = column.SectionAt(section);
-        if (!s.cells) {
-            palette.push_back(s.uniform);
-        } else {
-            for (int i = 0; i < kCells; i++) {
-                const uint16_t id = (*s.cells)[static_cast<size_t>(i)];
-                auto [it, inserted] = index.emplace(id, static_cast<uint16_t>(palette.size()));
-                if (inserted)
-                    palette.push_back(id);
-                indices[static_cast<size_t>(i)] = it->second;
+        const auto storage = [&](const uint16_t* cells, uint16_t uniform) {
+            std::vector<uint16_t> palette;
+            std::unordered_map<uint16_t, uint16_t> index;
+            std::array<uint16_t, kCells> indices{};
+            if (!cells) {
+                palette.push_back(uniform);
+            } else {
+                for (int i = 0; i < kCells; i++) {
+                    const uint16_t id = cells[i];
+                    auto [it, inserted] = index.emplace(id, static_cast<uint16_t>(palette.size()));
+                    if (inserted)
+                        palette.push_back(id);
+                    indices[static_cast<size_t>(i)] = it->second;
+                }
             }
-        }
-        WriteIndices(out, indices, BitsFor(palette.size()));
-        PutLe32(out, static_cast<uint32_t>(palette.size()));
-        std::vector<uint8_t> nbtBytes;
-        for (uint16_t id : palette) {
-            nbtBytes.clear();
-            nbt::Write(PaletteEntry(id), nbt::Encoding::LittleEndian, nbtBytes);
-            out.append(reinterpret_cast<const char*>(nbtBytes.data()), nbtBytes.size());
-        }
+            WriteIndices(out, indices, BitsFor(palette.size()));
+            PutLe32(out, static_cast<uint32_t>(palette.size()));
+            std::vector<uint8_t> nbtBytes;
+            for (uint16_t id : palette) {
+                nbtBytes.clear();
+                nbt::Write(PaletteEntry(id), nbt::Encoding::LittleEndian, nbtBytes);
+                out.append(reinterpret_cast<const char*>(nbtBytes.data()), nbtBytes.size());
+            }
+        };
+        const ChunkColumn::Section& s = column.SectionAt(section);
+        storage(s.cells ? s.cells->data() : nullptr, s.uniform);
+        if (liquid)
+            storage(liquid->data(), BlockRegistry::kAir);
     }
 
     bool WorldStorage::DecodeSubChunk(std::string_view d, uint16_t* cells, uint16_t& uniform,
-                                      bool& isUniform) {
+                                      bool& isUniform, uint16_t* liquid, bool* hasLiquid) {
+        if (hasLiquid)
+            *hasLiquid = false;
         if (d.empty())
             return false;
         size_t at = 0;
@@ -211,37 +303,51 @@ namespace perlite {
         }
         if (layers < 1)
             return false;
-        std::array<uint16_t, kCells> indices{};
-        int bits = 0;
-        if (!ReadIndices(d, at, indices, bits))
-            return false;
-        if (at + 4 > d.size())
-            return false;
-        const uint32_t count = GetLe32(d, at);
-        at += 4;
-        if (count == 0 || count > kCells)
-            return false;
-        std::vector<uint16_t> palette;
-        palette.reserve(count);
-        for (uint32_t i = 0; i < count; i++) {
-            nbt::Value entry;
-            size_t used = 0;
-            const std::span<const uint8_t> rest(reinterpret_cast<const uint8_t*>(d.data()) + at,
-                                                d.size() - at);
-            if (!nbt::Read(rest, nbt::Encoding::LittleEndian, entry, nullptr, &used))
+        // One paletted storage; a single-entry palette leaves the cells untouched.
+        const auto storage = [&](uint16_t* out, uint16_t& single, bool& isSingle) {
+            std::array<uint16_t, kCells> indices{};
+            int bits = 0;
+            if (!ReadIndices(d, at, indices, bits))
                 return false;
-            at += used;
-            palette.push_back(BlockFromPalette(entry));
-        }
-        if (palette.size() == 1) {
-            isUniform = true;
-            uniform = palette[0];
+            if (at + 4 > d.size())
+                return false;
+            const uint32_t count = GetLe32(d, at);
+            at += 4;
+            if (count == 0 || count > kCells)
+                return false;
+            std::vector<uint16_t> palette;
+            palette.reserve(count);
+            for (uint32_t i = 0; i < count; i++) {
+                nbt::Value entry;
+                size_t used = 0;
+                const std::span<const uint8_t> rest(reinterpret_cast<const uint8_t*>(d.data()) + at, d.size() - at);
+                if (!nbt::Read(rest, nbt::Encoding::LittleEndian, entry, nullptr, &used))
+                    return false;
+                at += used;
+                palette.push_back(BlockFromPalette(entry));
+            }
+            if (palette.size() == 1) {
+                isSingle = true;
+                single = palette[0];
+                return true;
+            }
+            isSingle = false;
+            for (int i = 0; i < kCells; i++) {
+                const uint16_t idx = indices[static_cast<size_t>(i)];
+                out[i] = idx < palette.size() ? palette[idx] : BlockRegistry::kAir;
+            }
             return true;
-        }
-        isUniform = false;
-        for (int i = 0; i < kCells; i++) {
-            const uint16_t idx = indices[static_cast<size_t>(i)];
-            cells[i] = idx < palette.size() ? palette[idx] : BlockRegistry::kAir;
+        };
+        if (!storage(cells, uniform, isUniform))
+            return false;
+        if (layers >= 2 && liquid && hasLiquid) {
+            uint16_t single = 0;
+            bool isSingle = false;
+            if (storage(liquid, single, isSingle)) {
+                if (isSingle)
+                    std::fill(liquid, liquid + kCells, single);
+                *hasLiquid = !isSingle || single != BlockRegistry::kAir;
+            }
         }
         return true;
     }
@@ -249,6 +355,13 @@ namespace perlite {
     bool WorldStorage::LoadChunk(int dimension, ChunkPos pos, ChunkColumn& out) {
         if (!db.IsOpen())
             return false;
+        {
+            std::lock_guard lock(saveMutex);
+            if (const auto it = pendingSaves.find({dimension, pos.x, pos.z}); it != pendingSaves.end()) {
+                out = it->second->Clone();
+                return true;
+            }
+        }
         std::string value;
         const bool hasVersion = db.Get(ChunkKey(dimension, pos, kTagVersion), value) ||
                                 db.Get(ChunkKey(dimension, pos, kTagLegacyVersion), value);
@@ -256,6 +369,7 @@ namespace perlite {
             return false;
         const DimensionRange range = RangeOf(dimension);
         std::vector<uint16_t> cells(kCells);
+        std::vector<uint16_t> liquidCells(kCells);
         for (int s = 0; s < range.SectionCount(); s++) {
             const int section = range.FirstSection() + s;
             const int yIndex = (range.minY >> 4) + s;
@@ -267,10 +381,12 @@ namespace perlite {
             }
             uint16_t uniform = 0;
             bool isUniform = false;
-            if (!DecodeSubChunk(value, cells.data(), uniform, isUniform)) {
+            bool hasLiquid = false;
+            if (!DecodeSubChunk(value, cells.data(), uniform, isUniform, liquidCells.data(), &hasLiquid)) {
                 out.FillSection(section, BlockRegistry::kAir);
                 continue;
             }
+            out.SetLiquidSection(section, hasLiquid ? liquidCells.data() : nullptr);
             if (isUniform)
                 out.FillSection(section, uniform);
             else
@@ -279,31 +395,49 @@ namespace perlite {
         if (db.Get(ChunkKey(dimension, pos, kTagData3D), value) && value.size() > 512) {
             size_t at = 512;
             std::array<uint16_t, kCells> indices{};
+            std::vector<uint32_t> ids;
             int bits = 0;
-            const int wantSub = (64 - range.minY) >> 4;
-            for (int sub = 0; sub <= wantSub && at < value.size(); sub++) {
+            std::vector<uint8_t> table(static_cast<size_t>(16 * ChunkColumn::kQuartLayers), vanilla::TableBiome(1));
+            std::vector<uint8_t> network(table.size(), 1);
+            bool any = false;
+            for (int s = 0; s < range.SectionCount() && at < value.size(); s++) {
                 if (static_cast<uint8_t>(value[at]) == 0xFF) {
                     at++;
-                    continue;
+                    if (ids.empty())
+                        continue; // nothing below to repeat
+                } else {
+                    if (!ReadIndices(value, at, indices, bits) || (bits != 0 && at + 4 > value.size()))
+                        break;
+                    const uint32_t n = bits == 0 ? 1 : GetLe32(value, at);
+                    if (bits != 0)
+                        at += 4;
+                    ids.clear();
+                    for (uint32_t i = 0; i < n && at + 4 <= value.size(); i++, at += 4)
+                        ids.push_back(GetLe32(value, at));
+                    if (ids.empty())
+                        break;
                 }
-                if (!ReadIndices(value, at, indices, bits) || at + 4 > value.size())
-                    break;
-                const uint32_t n = bits == 0 ? 1 : GetLe32(value, at);
-                if (bits != 0)
-                    at += 4;
-                std::vector<uint32_t> ids;
-                for (uint32_t i = 0; i < n && at + 4 <= value.size(); i++, at += 4)
-                    ids.push_back(GetLe32(value, at));
-                if (ids.empty())
-                    break;
-                if (sub == wantSub)
-                    for (int x = 0; x < 16; x++)
-                        for (int z = 0; z < 16; z++) {
-                            const uint16_t idx = indices[static_cast<size_t>(CellIndex(x, 0, z))];
-                            const uint32_t id = idx < ids.size() ? ids[idx] : ids[0];
-                            out.SetBiome(x, z, out.GenBiome(x, z),
-                                         static_cast<uint8_t>(std::min<uint32_t>(id, 255)));
+                const int section = range.FirstSection() + s;
+                for (int qx = 0; qx < 4; qx++)
+                    for (int qz = 0; qz < 4; qz++)
+                        for (int qy = 0; qy < 4; qy++) {
+                            const uint16_t idx = indices[static_cast<size_t>(CellIndex(qx * 4, qy * 4, qz * 4))];
+                            const uint8_t id = static_cast<uint8_t>(std::min<uint32_t>(idx < ids.size() ? ids[idx] : ids[0], 255));
+                            const size_t q = static_cast<size_t>(ChunkColumn::QuartIndex(qx, section * 4 + qy, qz));
+                            network[q] = id;
+                            table[q] = vanilla::TableBiome(id);
                         }
+                any = true;
+            }
+            if (any) {
+                out.SetQuartBiomes(table.data(), network.data());
+                // The flat biome map, as the generator keeps it: the biome at sea level.
+                const int seaQuart = (std::clamp(64, range.minY, range.MaxY()) - kMinY) >> 2;
+                for (int x = 0; x < 16; x++)
+                    for (int z = 0; z < 16; z++) {
+                        const size_t q = static_cast<size_t>(ChunkColumn::QuartIndex(x >> 2, seaQuart, z >> 2));
+                        out.SetBiome(x, z, table[q], network[q]);
+                    }
             }
         }
         return true;
@@ -320,7 +454,8 @@ namespace perlite {
             const int yIndex = (range.minY >> 4) + s;
             std::string key = ChunkKey(dimension, pos, kTagSubChunk);
             key.push_back(static_cast<char>(static_cast<int8_t>(yIndex)));
-            if (column.IsUniform(section) && column.SectionAt(section).uniform == BlockRegistry::kAir) {
+            if (column.IsUniform(section) && column.SectionAt(section).uniform == BlockRegistry::kAir &&
+                !column.HasLiquid(section)) {
                 db.Delete(key);
                 continue;
             }
@@ -340,29 +475,39 @@ namespace perlite {
                 data3d.push_back(static_cast<char>(h));
                 data3d.push_back(static_cast<char>(h >> 8));
             }
-        std::vector<uint32_t> biomePalette;
-        std::array<uint16_t, kCells> indices{};
-        for (int x = 0; x < 16; x++)
-            for (int z = 0; z < 16; z++) {
-                const uint32_t id = column.NetBiome(x, z);
-                auto it = std::find(biomePalette.begin(), biomePalette.end(), id);
-                if (it == biomePalette.end()) {
-                    biomePalette.push_back(id);
-                    it = biomePalette.end() - 1;
-                }
-                const uint16_t idx = static_cast<uint16_t>(it - biomePalette.begin());
-                for (int y = 0; y < 16; y++)
-                    indices[static_cast<size_t>(CellIndex(x, y, z))] = idx;
+        // Biomes: one paletted storage per section in 3D (a quart, 4 x 4 x 4 blocks, has one biome);
+        // 0xFF repeats the section below.
+        std::string previous;
+        for (int s = 0; s < range.SectionCount(); s++) {
+            const int section = range.FirstSection() + s;
+            std::vector<uint32_t> biomePalette;
+            std::array<uint16_t, kCells> indices{};
+            for (int x = 0; x < 16; x++)
+                for (int z = 0; z < 16; z++)
+                    for (int y = 0; y < 16; y++) {
+                        const uint32_t id = column.QuartNet(x >> 2, section * 4 + (y >> 2), z >> 2);
+                        auto it = std::find(biomePalette.begin(), biomePalette.end(), id);
+                        if (it == biomePalette.end()) {
+                            biomePalette.push_back(id);
+                            it = biomePalette.end() - 1;
+                        }
+                        indices[static_cast<size_t>(CellIndex(x, y, z))] =
+                            static_cast<uint16_t>(it - biomePalette.begin());
+                    }
+            std::string storage;
+            const int bits = BitsFor(biomePalette.size());
+            WriteIndices(storage, indices, bits);
+            if (bits != 0)
+                PutLe32(storage, static_cast<uint32_t>(biomePalette.size()));
+            for (uint32_t id : biomePalette)
+                PutLe32(storage, id);
+            if (s > 0 && storage == previous) {
+                data3d += static_cast<char>(0xFF);
+            } else {
+                data3d += storage;
+                previous = std::move(storage);
             }
-        std::string biomeStorage;
-        const int bits = BitsFor(biomePalette.size());
-        WriteIndices(biomeStorage, indices, bits);
-        if (bits != 0)
-            PutLe32(biomeStorage, static_cast<uint32_t>(biomePalette.size()));
-        for (uint32_t id : biomePalette)
-            PutLe32(biomeStorage, id);
-        for (int s = 0; s < kSections; s++)
-            data3d += s == 0 ? biomeStorage : std::string(1, static_cast<char>(0xFF));
+        }
         db.Put(ChunkKey(dimension, pos, kTagData3D), data3d);
         std::string finalized;
         PutLe32(finalized, 2);

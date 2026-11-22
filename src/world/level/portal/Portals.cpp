@@ -116,10 +116,16 @@ namespace perlite {
         }
         if (item.name == "minecraft:flint_and_steel" || item.name == "minecraft:fire_charge") {
             const int tx = x + kFaceOffset[face][0], ty = y + kFaceOffset[face][1], tz = z + kFaceOffset[face][2];
-            if (!TryLightPortal(dimension, tx, ty, tz))
+            if (!TryLightPortal(dimension, tx, ty, tz) && !LightFire(dimension, tx, ty, tz))
                 return false;
-            if (!by.Creative() && item.name == "minecraft:fire_charge") {
-                by.Inventory().TakeHeld(1);
+            for (Session* s : PlayersIn(dimension))
+                s->PlaySound("Ignite", tx + 0.5, ty + 0.5,
+                             tz + 0.5);
+            if (!by.Creative()) {
+                if (item.name == "minecraft:fire_charge")
+                    by.Inventory().TakeHeld(1);
+                else
+                    by.DamageHeld(1);
                 by.SendSlot(by.Inventory().selected);
             }
             return true;
@@ -161,8 +167,6 @@ namespace perlite {
                     for (int px = -1; px <= 1; px++)
                         for (int pz = -1; pz <= 1; pz++)
                             ApplyBlock(dimension, cx + px, y, cz + pz, portal);
-                    for (Session* s : PlayersIn(dimension))
-                        s->SendText(0, "", "§5The End portal opens");
                     return true;
                 }
             return true;
@@ -315,6 +319,104 @@ namespace perlite {
         return true;
     }
 
+    bool Server::FindPortalNear(int dimension, int x, int y, int z, int reach, PortalFrame& out) {
+        ChunkManager& world = World(dimension);
+        const DimensionRange range = RangeOf(dimension);
+        // Load the chunks right around the spot; farther ones are searched only if already loaded.
+        for (int cx = (x >> 4) - 1; cx <= (x >> 4) + 1; cx++)
+            for (int cz = (z >> 4) - 1; cz <= (z >> 4) + 1; cz++)
+                world.Load({cx, cz});
+        static std::vector<int8_t> isPortal;
+        const auto portalId = [&](uint16_t id) {
+            if (id >= isPortal.size())
+                isPortal.resize(static_cast<size_t>(id) + 256, -1);
+            if (isPortal[id] < 0)
+                isPortal[id] = NameOf(id) == "minecraft:portal" ? 1 : 0;
+            return isPortal[id] == 1;
+        };
+        double best = 1e300;
+        bool found = false;
+        int fx = 0, fy = 0, fz = 0;
+        reach = std::min(reach, 48); // farther portals are found through the remembered list
+        for (int cx = (x - reach) >> 4; cx <= (x + reach) >> 4; cx++)
+            for (int cz = (z - reach) >> 4; cz <= (z + reach) >> 4; cz++) {
+                const auto entry = world.Peek({cx, cz});
+                if (!entry)
+                    continue;
+                const ChunkColumn& column = entry->column;
+                for (int s = 0; s < range.SectionCount(); s++) {
+                    const int section = range.FirstSection() + s;
+                    const ChunkColumn::Section& sec = column.SectionAt(section);
+                    if (!sec.cells && !portalId(sec.uniform))
+                        continue;
+                    for (int lx = 0; lx < 16; lx++)
+                        for (int lz = 0; lz < 16; lz++)
+                            for (int ly = 0; ly < 16; ly++) {
+                                const int by = kMinY + section * 16 + ly;
+                                const uint16_t id = sec.cells ? (*sec.cells)[static_cast<size_t>(CellIndex(lx, ly, lz))]
+                                                              : sec.uniform;
+                                if (id == BlockRegistry::kAir || !portalId(id))
+                                    continue;
+                                const int bx = (cx << 4) + lx, bz = (cz << 4) + lz;
+                                const double d = std::hypot(bx - x, bz - z) + std::abs(by - y) * 0.01;
+                                if (d < best) {
+                                    best = d;
+                                    fx = bx;
+                                    fy = by;
+                                    fz = bz;
+                                    found = true;
+                                }
+                            }
+                }
+            }
+        if (!found)
+            return false;
+        // Walk to the bottom corner of that portal and measure it.
+        const auto lit = [&](int bx, int by, int bz) { return portalId(BlockAt(dimension, bx, by, bz)); };
+        while (lit(fx, fy - 1, fz))
+            fy--;
+        const bool alongX = lit(fx - 1, fy, fz) || lit(fx + 1, fy, fz);
+        const int dx = alongX ? 1 : 0, dz = alongX ? 0 : 1;
+        while (lit(fx - dx, fy, fz - dz)) {
+            fx -= dx;
+            fz -= dz;
+        }
+        int width = 0, height = 0;
+        while (width < 21 && lit(fx + dx * width, fy, fz + dz * width))
+            width++;
+        while (height < 21 && lit(fx, fy + height, fz))
+            height++;
+        out = {dimension, fx, fy, fz, alongX ? 0 : 1, std::max(1, width), std::max(1, height)};
+        return true;
+    }
+
+    // The chunks a trip needs on the other side are generated by the workers while the player
+    // stands in the portal; the trip waits for them rather than generating them on the tick.
+    bool Server::PortalTargetReady(Session& who, bool endPortal) {
+        const int from = who.DimensionId();
+        int to, cx0, cx1, cz0, cz1;
+        if (endPortal) {
+            if (from == kEnd)
+                return true;
+            to = kEnd;
+            cx0 = 5, cx1 = 7, cz0 = -1, cz1 = 0;
+        } else {
+            to = from == kNether ? kOverworld : kNether;
+            const double scale = to == kNether ? 1.0 / 8.0 : 8.0;
+            const int tx = static_cast<int>(std::floor(who.X() * scale)), tz = static_cast<int>(std::floor(who.Z() * scale));
+            cx0 = (tx - 16) >> 4, cx1 = (tx + 16) >> 4, cz0 = (tz - 16) >> 4, cz1 = (tz + 16) >> 4;
+        }
+        ChunkManager& world = World(to);
+        bool ready = true;
+        for (int cx = cx0; cx <= cx1; cx++)
+            for (int cz = cz0; cz <= cz1; cz++)
+                if (!world.Peek({cx, cz})) {
+                    world.Request({cx, cz});
+                    ready = false;
+                }
+        return ready;
+    }
+
     void Server::TravelThroughPortal(Session& who, bool endPortal) {
         const int from = who.DimensionId();
         if (endPortal) {
@@ -349,6 +451,10 @@ namespace perlite {
             if (NameOf(BlockAt(to, target.x, target.y, target.z)) != "minecraft:portal")
                 best = nullptr;
         }
+        if (!best && FindPortalNear(to, tx, ty, tz, reach, target)) {
+            portals.push_back(target);
+            best = &portals.back();
+        }
         if (!best)
             PlacePortalNear(to, tx, std::clamp(ty, RangeOf(to).minY + 2, RangeOf(to).MaxY() - 8), tz, target);
         const double ox = target.axis == 0 ? target.x + target.width / 2.0 : target.x + 0.5;
@@ -379,6 +485,10 @@ namespace perlite {
             if (s->portalCooldown > 0)
                 continue;
             if (end) {
+                // Waits (at most ten seconds) for the end platform's chunks.
+                if (!PortalTargetReady(*s, true) && ++s->portalTicks < 200)
+                    continue;
+                s->portalTicks = 0;
                 s->portalCooldown = 1;
                 TravelThroughPortal(*s, true);
                 continue;
@@ -388,7 +498,9 @@ namespace perlite {
             const int needed = s->Creative() ? 1 : RuleValue("playersnetherportaldefaultdelay") > 0
                                                        ? RuleValue("playersnetherportaldefaultdelay")
                                                        : 80;
-            if (++s->portalTicks >= needed) {
+            ++s->portalTicks;
+            const bool ready = PortalTargetReady(*s, false);
+            if (s->portalTicks >= needed && (ready || s->portalTicks >= needed + 200)) {
                 s->portalTicks = 0;
                 TravelThroughPortal(*s, false);
             }

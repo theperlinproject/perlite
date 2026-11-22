@@ -179,6 +179,7 @@ namespace perlite {
                 mobNames += '|';
             mobNames += id.substr(id.find(':') + 1);
         }
+        mobNames += "|tnt";
         add({"summon"}, "Summons an entity", true,
             {"<entityType:enum(" + mobNames + ")>", "<entityType:enum(" + mobNames + ")> <spawnPos:pos>"},
             [this, say, fail](CommandCtx& c) {
@@ -193,7 +194,10 @@ namespace perlite {
                     y = c["spawnPos"].pos[1];
                     z = c["spawnPos"].pos[2];
                 }
-                Mob* m = Mobs().Spawn("minecraft:" + c["entityType"].text, x, y, z, true);
+                // Lit TNT is an entity of its own, not a mob: four seconds of fuse, as in the game.
+                Mob* m = c["entityType"].text == "tnt"
+                             ? Mobs().SpawnPrimedTnt(x, y, z, 80)
+                             : Mobs().Spawn("minecraft:" + c["entityType"].text, x, y, z, true);
                 if (!m) {
                     fail(c.source, "Unable to summon entity");
                     return;

@@ -254,6 +254,16 @@ namespace perlite::vanilla {
         return tableIndex >= 0 && tableIndex < static_cast<int>(sizeof(kNetworkBiome)) ? kNetworkBiome[tableIndex] : 1;
     }
 
+    uint8_t TableBiome(uint8_t networkId) {
+        for (size_t i = 0; i < sizeof(kNetworkBiome); i++)
+            if (kNetworkBiome[i] == networkId)
+                return static_cast<uint8_t>(i);
+        for (size_t i = 0; i < sizeof(kNetworkBiome); i++)
+            if (kNetworkBiome[i] == 1)
+                return static_cast<uint8_t>(i);
+        return 0;
+    }
+
     void VanillaSurface::StoreBiomes(const uint8_t* biomes, ChunkColumn& column) {
         for (int x = 0; x < 16; x++)
             for (int z = 0; z < 16; z++) {

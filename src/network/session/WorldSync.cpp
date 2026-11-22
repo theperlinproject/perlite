@@ -76,12 +76,12 @@ namespace perlite {
         Send(p);
     }
 
-    void Session::SendBlockUpdate(int x, int y, int z, int32_t networkId) {
+    void Session::SendBlockUpdate(int x, int y, int z, int32_t networkId, uint32_t layer) {
         proto::UpdateBlockPacket u;
         u.position = {x, y, z};
         u.blockRuntimeId = static_cast<uint32_t>(networkId);
         u.flags = 3;
-        u.layer = 0;
+        u.layer = layer;
         Send(u);
     }
 

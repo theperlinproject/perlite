@@ -155,6 +155,27 @@ namespace {
     }
 }
 
+// A nether chunk keeps its 3D biomes through the disk (it was coming back as plains, with overworld fog).
+static void NetherBiomes(const fs::path& dir) {
+    WorldStorage storage;
+    std::string error;
+    CHECK(storage.Open((dir / "biomes").string(), error));
+    ChunkColumn c;
+    c.FillSection(RangeOf(kNether).FirstSection(), BlockCatalog::Instance().DefaultBlock("minecraft:netherrack"));
+    std::vector<uint8_t> table(static_cast<size_t>(16 * ChunkColumn::kQuartLayers), 0), net(table.size(), 8);
+    net[static_cast<size_t>(ChunkColumn::QuartIndex(1, RangeOf(kNether).FirstSection() * 4 + 9, 2))] = 178;
+    c.SetQuartBiomes(table.data(), net.data());
+    storage.SaveChunk(kNether, {3, 4}, c);
+    CHECK(storage.Flush());
+    ChunkColumn back;
+    CHECK(storage.LoadChunk(kNether, {3, 4}, back));
+    const int base = RangeOf(kNether).FirstSection() * 4;
+    CHECK(back.QuartNet(0, base, 0) == 8 && back.QuartNet(3, base + 20, 3) == 8);
+    CHECK(back.QuartNet(1, base + 9, 2) == 178);
+    CHECK(back.NetBiome(5, 5) == 8);
+    storage.Close();
+}
+
 int main() {
     RoundTripSections();
 
@@ -162,6 +183,7 @@ int main() {
     std::error_code ec;
     fs::remove_all(dir, ec);
     fs::create_directories(dir);
+    NetherBiomes(dir);
 
     uint16_t gold = 0;
     {

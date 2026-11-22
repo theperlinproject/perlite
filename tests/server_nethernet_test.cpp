@@ -28,6 +28,7 @@
 #include <openssl/param_build.h>
 
 #include <atomic>
+#include <set>
 #include <sstream>
 #include <chrono>
 #include <mutex>
@@ -196,10 +197,14 @@ namespace {
         static void CloseSocket(Socket s) { ::close(s); }
 #endif
         Socket sock{};
+        std::set<std::string> seen;
         uint64_t id = 0x1122334455667788ull;
         uint64_t server = 0;
         std::string serverData;
-        LanClient() {
+        sockaddr_in replyTo{};
+        bool haveReplyTo = false;
+        // sharePort: bind port 7551 as well, like a game running on the server's machine.
+        explicit LanClient(bool sharePort = false) {
 #ifdef _WIN32
             WSADATA wsa;
             WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -207,7 +212,16 @@ namespace {
             sock = ::socket(AF_INET, SOCK_DGRAM, 0);
             sockaddr_in a{};
             a.sin_family = AF_INET;
-            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            a.sin_addr.s_addr = htonl(sharePort ? INADDR_ANY : INADDR_LOOPBACK);
+            if (sharePort) {
+                int yes = 1;
+                ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&yes), sizeof(yes));
+#ifdef SO_REUSEPORT
+                ::setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, reinterpret_cast<const char*>(&yes), sizeof(yes));
+#endif
+                ::setsockopt(sock, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&yes), sizeof(yes));
+                a.sin_port = htons(lan::kPort);
+            }
             ::bind(sock, reinterpret_cast<sockaddr*>(&a), sizeof(a));
         }
         ~LanClient() { CloseSocket(sock); }
@@ -217,6 +231,8 @@ namespace {
             to.sin_family = AF_INET;
             to.sin_port = htons(lan::kPort);
             to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            if (type == lan::kMessage && haveReplyTo)
+                to = replyTo; // signals go back to where the server's response came from
             ::sendto(sock, d.data(), static_cast<int>(d.size()), 0, reinterpret_cast<sockaddr*>(&to), sizeof(to));
         }
         void Signal(const std::string& text) { Send(lan::kMessage, lan::MessageBody(server, text)); }
@@ -227,9 +243,25 @@ namespace {
             while (std::chrono::steady_clock::now() < end) {
                 if (Poll(sock, 50) <= 0)
                     continue;
-                const int n = static_cast<int>(::recv(sock, buf.data(), static_cast<int>(buf.size()), 0));
+                sockaddr_in from{};
+                socklen_t fromLen = sizeof(from);
+                const int n = static_cast<int>(::recvfrom(sock, buf.data(), static_cast<int>(buf.size()), 0,
+                                                          reinterpret_cast<sockaddr*>(&from), &fromLen));
                 uint64_t sender = 0;
                 if (n > 0 && lan::Decode(buf.substr(0, static_cast<size_t>(n)), type, sender, body) && sender != id) {
+                    if (type == lan::kMessage) {
+                        uint64_t recipient = 0;
+                        std::string text;
+                        if (!lan::ParseMessageBody(body, recipient, text) || recipient != id)
+                            continue;
+                        // The server may send a message twice (unicast and broadcast); take it once.
+                        if (!seen.insert(text).second)
+                            continue;
+                    }
+                    if (type == lan::kResponse) {
+                        replyTo = from;
+                        haveReplyTo = true;
+                    }
                     server = sender;
                     return true;
                 }
@@ -257,7 +289,8 @@ namespace {
     };
 
     Outcome JoinOver(uint16_t port, const std::string& identity, const std::string& clientToken,
-                     const testauth::Key* assertWith, bool fullHandshake, bool overLan = false) {
+                     const testauth::Key* assertWith, bool fullHandshake, bool overLan = false,
+                     bool sharePort = false) {
         Outcome out;
         auto probe = minihttp::Request(port, "GET", "/v1/join?version=1.26.60&protocol=2225&platform=1&id=7");
         CHECK(probe && probe->status == 200 && probe->contentType == "application/json");
@@ -304,7 +337,8 @@ namespace {
         std::string offer = std::string(*pc->localDescription());
         if (overLan) {
             // Vanilla trickles: the offer goes out bare and the candidates follow one by one.
-            LanClient client;
+            LanClient client(sharePort);
+            const std::string conn = sharePort ? "5353" : "4242";
             CHECK(client.Discover());
             std::string bare, candidates;
             std::vector<std::string> lines;
@@ -320,9 +354,9 @@ namespace {
                         bare += line + "\r\n";
                 }
             }
-            client.Signal("CONNECTREQUEST 4242 " + bare);
+            client.Signal("CONNECTREQUEST " + conn + " " + bare);
             for (const auto& c : lines)
-                client.Signal("CANDIDATEADD 4242 " + c);
+                client.Signal("CANDIDATEADD " + conn + " " + c);
             bool answered = false;
             uint16_t type = 0;
             std::string body;
@@ -333,14 +367,14 @@ namespace {
                 std::string text;
                 if (!lan::ParseMessageBody(body, to, text) || to != client.id)
                     continue;
-                if (text.starts_with("CONNECTRESPONSE 4242 ")) {
-                    const std::string sdp = text.substr(21);
+                if (text.starts_with("CONNECTRESPONSE " + conn + " ")) {
+                    const std::string sdp = text.substr(17 + conn.size());
                     // LAN answers carry no identity line, like the offers.
                     CHECK(!sdp.contains("a=identity"));
                     pc->setRemoteDescription(rtc::Description(sdp, rtc::Description::Type::Answer));
                     answered = true;
-                } else if (text.starts_with("CANDIDATEADD 4242 ") && answered) {
-                    pc->addRemoteCandidate(rtc::Candidate(text.substr(18), "0"));
+                } else if (text.starts_with("CANDIDATEADD " + conn + " ") && answered) {
+                    pc->addRemoteCandidate(rtc::Candidate(text.substr(14 + conn.size()), "0"));
                 } else if (text.starts_with("CONNECTERROR")) {
                     std::fprintf(stderr, "lan error: %s\n", text.c_str());
                     break;
@@ -566,6 +600,10 @@ int main() {
         const Outcome viaLan =
             JoinOver(kPort, guest.Identity(guest.Chain(false), 2), guest.ClientToken(), nullptr, true, true);
         CHECK(viaLan.connected && viaLan.loginSuccess && viaLan.spawned);
+        // The same from a game on this machine, which listens on port 7551 too.
+        const Outcome sameMachine =
+            JoinOver(kPort, guest.Identity(guest.Chain(false), 2), guest.ClientToken(), nullptr, true, true, true);
+        CHECK(sameMachine.connected && sameMachine.loginSuccess && sameMachine.spawned);
     }
     open.RequestStop();
     ticker.join();

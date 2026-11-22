@@ -1,6 +1,7 @@
 #include "network/session/SessionInternal.hpp"
 
 #include <chrono>
+#include <cmath>
 
 namespace perlite {
     void Session::OnChunkRadius(std::span<const uint8_t> body) {
@@ -124,18 +125,27 @@ namespace perlite {
         int budget = connection->Local() ? kChunksPerTick * 8
                      : state == State::Loading ? kChunksPerTick * 3
                                                : kChunksPerTick * 2;
+        // Chunks go out nearest first: once a nearer chunk is still generating, farther ready chunks
+        // wait (beyond one ring of slack) so the world fills in from the player outwards instead of
+        // showing detached islands. Farther chunks are still requested so the workers stay busy.
         int asked = 0, sentNow = 0;
+        double sendLimit = 1e9;
         for (const ChunkPos& pos : want) {
+            const int dx = pos.x - center.x, dz = pos.z - center.z;
+            const double ring = std::sqrt(static_cast<double>(dx * dx + dz * dz));
             auto entry = server.World(dimension).Get(pos);
             if (!entry) {
-                if (++asked >= 128)
+                sendLimit = std::min(sendLimit, ring + 1.5);
+                if (++asked >= 192)
                     break;
                 continue;
             }
-            if (budget <= 0)
-                break;
-            if (sentNow > 0 && std::chrono::steady_clock::now() > server.ChunkSendDeadline())
-                break;
+            if (ring > sendLimit || budget <= 0)
+                continue;
+            if (sentNow > 0 && std::chrono::steady_clock::now() > server.ChunkSendDeadline()) {
+                budget = 0;
+                continue;
+            }
             SendChunk(*entry, pos);
             sent.insert(pos);
             budget--;

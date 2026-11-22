@@ -1,6 +1,7 @@
 #include "common/Log.hpp"
 #include <cstdlib>
 #include "world/level/chunk/ChunkManager.hpp"
+#include "world/level/block/Waterlog.hpp"
 
 #include <climits>
 #include "world/level/storage/WorldStorage.hpp"
@@ -103,6 +104,8 @@ namespace perlite {
                 Finish(batch, columns);
             else
                 backend->Generate(batch, columns);
+            for (ChunkColumn& c : columns)
+                waterlog::FillGenerated(c);
             std::lock_guard lock(mutex);
             for (size_t i = 0; i < batch.size(); i++) {
                 auto entry = std::make_shared<ChunkEntry>();
@@ -250,6 +253,16 @@ namespace perlite {
         return nullptr;
     }
 
+    std::shared_ptr<ChunkEntry> ChunkManager::Request(ChunkPos pos) {
+        if (const auto it = chunks.find(pos); it != chunks.end())
+            return it->second;
+        {
+            std::lock_guard lock(mutex);
+            pinned.insert(pos);
+        }
+        return Get(pos);
+    }
+
     std::shared_ptr<ChunkEntry> ChunkManager::Peek(ChunkPos pos) const {
         const auto it = chunks.find(pos);
         return it == chunks.end() ? nullptr : it->second;
@@ -311,6 +324,7 @@ namespace perlite {
             Finish(batch, columns);
         else
             backend->Generate(batch, columns);
+        waterlog::FillGenerated(columns[0]);
         auto entry = std::make_shared<ChunkEntry>();
         entry->column = std::move(columns[0]);
         chunks[pos] = entry;
@@ -370,6 +384,24 @@ namespace perlite {
         return true;
     }
 
+    uint16_t ChunkManager::GetLiquid(int x, int y, int z) const {
+        const ChunkColumn* column = FindColumn(x >> 4, z >> 4);
+        return column ? column->GetLiquid(x & 15, y, z & 15) : 0;
+    }
+
+    bool ChunkManager::SetLiquid(int x, int y, int z, uint16_t block) {
+        const auto it = chunks.find({x >> 4, z >> 4});
+        if (it == chunks.end())
+            return false;
+        if (it->second->column.GetLiquid(x & 15, y, z & 15) == block)
+            return true;
+        it->second->column.SetLiquid(x & 15, y, z & 15, block);
+        edited.insert(it->first);
+        if (store)
+            dirty.insert(it->first);
+        return true;
+    }
+
     size_t ChunkManager::UnloadFar(const std::vector<Viewer>& viewers, int margin) {
         const auto far = [&](ChunkPos p) {
             for (const Viewer& v : viewers)
@@ -384,8 +416,10 @@ namespace perlite {
                 continue;
             }
             if (store) {
-                if (dirty.erase(it->first))
-                    store->SaveChunk(dimension, it->first, it->second->column);
+                if (dirty.erase(it->first)) {
+                    std::shared_ptr<ChunkEntry> entry = it->second;
+                    store->QueueChunk(dimension, it->first, std::shared_ptr<const ChunkColumn>(entry, &entry->column));
+                }
                 edited.erase(it->first);
                 eraseEpoch.fetch_add(1, std::memory_order_relaxed);
                 it = chunks.erase(it);
@@ -415,7 +449,7 @@ namespace perlite {
         size_t saved = 0;
         for (const ChunkPos& p : dirty)
             if (const auto it = chunks.find(p); it != chunks.end()) {
-                store->SaveChunk(dimension, p, it->second->column);
+                store->QueueChunk(dimension, p, std::make_shared<const ChunkColumn>(it->second->column.Clone()));
                 saved++;
             }
         dirty.clear();

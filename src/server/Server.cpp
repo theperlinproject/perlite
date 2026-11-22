@@ -1,4 +1,5 @@
 #include "server/Server.hpp"
+#include "world/level/block/Waterlog.hpp"
 #include "world/actor/mob/MobRegistry.hpp"
 #include "world/actor/mob/VanillaEntities.hpp"
 #include "world/level/block/VoxelShapes.hpp"
@@ -359,23 +360,28 @@ namespace perlite {
 
     namespace {
         // With PERLITE_TICK_PROFILE set, a tick slower than 50 ms is logged with the time of each part.
+        // Times the parts of a tick. A tick that runs long is reported with its parts, so a "can't
+        // keep up" has a cause in the log: always past 250 ms (at most every 10 s), and past 50 ms
+        // with PERLITE_TICK_PROFILE set.
         class TickSections {
         public:
-            TickSections() : last(std::chrono::steady_clock::now()), first(last) {}
+            TickSections() : last(std::chrono::steady_clock::now()), first(last) { parts.reserve(16); }
             void Mark(const char* name) {
-                if (!Enabled())
-                    return;
                 const auto now = std::chrono::steady_clock::now();
                 parts.emplace_back(name, std::chrono::duration<double, std::milli>(now - last).count());
                 last = now;
             }
             void Report(uint64_t tick) const {
-                if (!Enabled())
-                    return;
                 const double total =
                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - first).count();
-                if (total < 50.0)
+                static const bool profiling = std::getenv("PERLITE_TICK_PROFILE") != nullptr;
+                if (total < (profiling ? 50.0 : 250.0))
                     return;
+                static std::chrono::steady_clock::time_point lastReport{};
+                const auto now = std::chrono::steady_clock::now();
+                if (!profiling && now - lastReport < std::chrono::seconds(10))
+                    return;
+                lastReport = now;
                 std::string line = "Slow tick " + std::to_string(tick) + " (" + std::to_string(static_cast<int>(total)) +
                                    " ms):";
                 for (const auto& [name, ms] : parts)
@@ -385,10 +391,6 @@ namespace perlite {
             }
 
         private:
-            static bool Enabled() {
-                static const bool on = std::getenv("PERLITE_TICK_PROFILE") != nullptr;
-                return on;
-            }
             std::chrono::steady_clock::time_point last, first;
             std::vector<std::pair<const char*, double>> parts;
         };
@@ -432,13 +434,18 @@ namespace perlite {
             mobWorld->Tick();
             sections.Mark("mobs");
             TickContainers();
+            sections.Mark("containers");
             TickPortals();
+            sections.Mark("portals");
             TickGravity();
+            TickFire();
             sections.Mark("blocks");
             TickRandom();
             sections.Mark("random ticks");
             plugins->Pump();
+            sections.Mark("plugins");
             AutosaveTick();
+            sections.Mark("autosave");
             if (plugins->AnyoneListens(abi::Event::Tick))
                 plugins->Dispatch<abi::Event::Tick>({.dt = 0.05f, .tick = tick});
         }
@@ -831,6 +838,13 @@ namespace perlite {
                 if (s->DimensionId() == dim)
                     viewers.push_back({{static_cast<int>(std::floor(s->X())) >> 4, static_cast<int>(std::floor(s->Z())) >> 4},
                                        std::max(s->ChunkRadius(), 8)});
+                else if (s->portalTicks > 0 && (dim == kNether || s->DimensionId() == kNether)) {
+                    // Keep what a player standing in a nether portal is about to travel to.
+                    const double scale = dim == kNether ? 1.0 / 8.0 : 8.0;
+                    viewers.push_back({{static_cast<int>(std::floor(s->X() * scale)) >> 4,
+                                        static_cast<int>(std::floor(s->Z() * scale)) >> 4},
+                                       2});
+                }
             if (viewers.empty())
                 continue;
             world->UnloadFar(viewers, kMargin);
@@ -1068,7 +1082,22 @@ namespace perlite {
     void Server::ApplyBlock(int dimension, int x, int y, int z, uint16_t block) {
         const bool listens = plugins->AnyoneListens(abi::Event::BlockChanged);
         const std::string before = listens ? BlockRegistry::Instance().Name(World(dimension).GetBlock(x, y, z)) : std::string();
-        World(dimension).SetBlock(x, y, z, block);
+        ChunkManager& world = World(dimension);
+        world.SetBlock(x, y, z, block);
+        // The liquid layer follows the block: water stays where a waterlogged block is removed, and
+        // goes where a block that cannot hold water takes its place.
+        int liquidChange = -1;
+        if (const uint16_t liquid = world.GetLiquid(x, y, z); liquid != BlockRegistry::kAir) {
+            if (block == BlockRegistry::kAir) {
+                block = liquid;
+                world.SetBlock(x, y, z, block);
+                world.SetLiquid(x, y, z, BlockRegistry::kAir);
+                liquidChange = BlockRegistry::kAir;
+            } else if (!waterlog::Holds(block)) {
+                world.SetLiquid(x, y, z, BlockRegistry::kAir);
+                liquidChange = BlockRegistry::kAir;
+            }
+        }
         if (dimension == kOverworld && gravityQueue.size() < 65536) {
             const int due = static_cast<int>(TickCount()) + 2;
             gravityQueue.push_back({x, y, z, due});
@@ -1076,8 +1105,11 @@ namespace perlite {
         }
         const int32_t hash = BlockRegistry::Instance().Hash(block);
         for (Session* s : PlayersIn(dimension))
-            if (s->HasSent({x >> 4, z >> 4}))
+            if (s->HasSent({x >> 4, z >> 4})) {
                 s->SendBlockUpdate(x, y, z, hash);
+                if (liquidChange >= 0)
+                    s->SendBlockUpdate(x, y, z, BlockRegistry::Instance().Hash(static_cast<uint16_t>(liquidChange)), 1);
+            }
         if (listens)
             plugins->Dispatch<abi::Event::BlockChanged>(
                 {.x = x, .y = y, .z = z, .from = before, .to = BlockRegistry::Instance().Name(block)});
@@ -1109,6 +1141,7 @@ namespace perlite {
         if (!w.Peek({x >> 4, z >> 4}))
             return;
         to.SendBlockUpdate(x, y, z, BlockRegistry::Instance().Hash(w.GetBlock(x, y, z)));
+        to.SendBlockUpdate(x, y, z, BlockRegistry::Instance().Hash(w.GetLiquid(x, y, z)), 1);
     }
 
     abi::Status Server::SetBlock(int x, int y, int z, const std::string& block) {
@@ -1161,6 +1194,7 @@ namespace perlite {
                           held.Enchant(16));
         }
         ApplyBlock(dim, x, y, z, BlockRegistry::kAir);
+        BreakPartner(dim, x, y, z, current);
         OnBlockRemoved(by, dim, x, y, z, name);
         if (!by.Creative())
             by.OnBlockMined(LootTables::Hardness(name));
@@ -1235,37 +1269,6 @@ namespace perlite {
             return;
         }
         mobWorld->SpawnXpOrbs(x, y, z, amount);
-    }
-
-    bool Server::PlayerPlace(Session& by, int x, int y, int z, int face) {
-        const auto reject = [&](int tx, int ty, int tz) {
-            by.CorrectBlock(x, y, z);
-            by.CorrectBlock(tx, ty, tz);
-            by.SendSlot(by.Inventory().selected);
-            return false;
-        };
-        if (face < 0 || face > 5)
-            return false;
-        const int tx = x + kFaceOffset[face][0], ty = y + kFaceOffset[face][1], tz = z + kFaceOffset[face][2];
-        const ItemStack& held = by.Inventory().Held();
-        const CatalogItem* item = held.Empty() ? nullptr : BlockCatalog::Instance().ItemById(held.networkId);
-        const int dim = by.DimensionId();
-        ChunkManager& world = World(dim);
-        const DimensionRange range = RangeOf(dim);
-        if (item && UseItemOn(by, dim, x, y, z, face, *item))
-            return true;
-        if (!item || !item->block || ty < range.minY || ty > range.MaxY() || !by.InReach(tx, ty, tz) ||
-            !world.Peek({tx >> 4, tz >> 4}) || world.GetBlock(tx, ty, tz) != BlockRegistry::kAir)
-            return reject(tx, ty, tz);
-        if (plugins->AnyoneListens(abi::Event::BlockPlace) &&
-            plugins->Dispatch<abi::Event::BlockPlace>({by.Id(), tx, ty, tz, item->name}))
-            return reject(tx, ty, tz);
-        ApplyBlock(dim, tx, ty, tz, BlockCatalog::Instance().RegistryId(item->blockHash));
-        if (!by.Creative()) {
-            by.Inventory().TakeHeld(1);
-            by.SendSlot(by.Inventory().selected);
-        }
-        return true;
     }
 
     std::expected<int, abi::Status> Server::GiveItem(uint64_t player, const std::string& itemName,

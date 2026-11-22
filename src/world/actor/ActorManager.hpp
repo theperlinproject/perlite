@@ -20,7 +20,11 @@ namespace perlite {
     bool FallingFree(uint16_t id);
 
     namespace actorkind {
-        constexpr int Mob = 0, FallingBlock = 1, PrimedTnt = 2, ExperienceOrb = 3;
+        constexpr int Mob = 0, FallingBlock = 1, PrimedTnt = 2, ExperienceOrb = 3, Projectile = 4;
+    }
+
+    namespace projectile {
+        constexpr int Arrow = 0, Snowball = 1, Egg = 2, EnderPearl = 3, XpBottle = 4;
     }
 
     struct Mob {
@@ -62,6 +66,10 @@ namespace perlite {
         int variant = -1; // the "variant" sent to clients (slime size, rabbit coat); -1 sends none
         float maxHealth = 0;  // 0: the type's health
         float damage = -1;    // attack damage for this mob's size; -1: the type's damage
+        uint8_t shot = 0;       // projectile:: type, for projectiles
+        bool stuck = false;     // an arrow in a block
+        bool canPickup = false; // an arrow a survival player can take back
+        bool crit = false;      // a fully drawn arrow
     };
 
     class ActorManager {
@@ -72,6 +80,10 @@ namespace perlite {
         Mob* Spawn(const std::string& identifier, double x, double y, double z, bool persistent = true);
         Mob* SpawnFallingBlock(double x, double y, double z, uint16_t block);
         Mob* SpawnPrimedTnt(double x, double y, double z, int fuse);
+        // A projectile flying from (x, y, z) at the given velocity (blocks per tick). The owner is the
+        // runtime id of the player or mob that shot or threw it.
+        Mob* SpawnProjectile(int type, double x, double y, double z, double vx, double vy, double vz, uint64_t owner,
+                             bool pickup = true);
         void Explosion(double x, double y, double z, float power, uint64_t source, bool breakBlocks = true);
         bool Kill(uint64_t id);
         // Puts a slime or magma cube in a size class (index into its type's sizes) and redraws it.
@@ -110,6 +122,8 @@ namespace perlite {
         bool TickPrimedTnt(Mob& m);
         bool TickExperienceOrb(Mob& m);
         void TickProjectile(Mob& m);
+        bool TickShot(Mob& m);
+        void Land(Mob& m, double x, double y, double z, Session* shooter);
         void Shoot(Mob& m, Session& at);
 
         Server& server;

@@ -82,4 +82,6 @@ namespace perlite::vanilla {
     };
     BiomeSite SiteOf(int worldX, int worldZ, int top);
     uint8_t NetworkBiome(int tableIndex);
+    // The generator's table index of a network biome id (plains when unknown).
+    uint8_t TableBiome(uint8_t networkId);
 }

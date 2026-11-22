@@ -59,9 +59,22 @@ namespace perlite {
     void Session::SendText(uint8_t type, const std::string& source, const std::string& message) {
         proto::TextPacket t;
         t.needsTranslation = false;
-        t.category = type == static_cast<uint8_t>(proto::TextPacketType::Chat)
-                         ? proto::TextPacketCategory::Authored
-                         : proto::TextPacketCategory::MessageOnly;
+        // The body variant must agree with the message type (MessageOnly / AuthorAndMessage / MessageAndParams).
+        switch (static_cast<proto::TextPacketType>(type)) {
+        case proto::TextPacketType::Chat:
+        case proto::TextPacketType::Whisper:
+        case proto::TextPacketType::Announcement:
+            t.category = proto::TextPacketCategory::Authored;
+            break;
+        case proto::TextPacketType::Translation:
+        case proto::TextPacketType::Popup:
+        case proto::TextPacketType::JukeboxPopup:
+            t.category = proto::TextPacketCategory::Parameters;
+            break;
+        default:
+            t.category = proto::TextPacketCategory::MessageOnly;
+            break;
+        }
         t.type = static_cast<proto::TextPacketType>(type);
         t.sourceName = source;
         t.message = message;

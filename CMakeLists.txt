@@ -82,6 +82,8 @@ set(PERLITE_SOURCES
     src/plugin/PluginHost.cpp
     src/server/Config.cpp
     src/server/Server.cpp
+    src/server/Placement.cpp
+    src/server/Fire.cpp
     src/server/RandomTicks.cpp
     src/server/VanillaPack.cpp
     src/server/ServerData.cpp
@@ -120,6 +122,7 @@ set(PERLITE_SOURCES
     src/world/inventory/ItemNbt.cpp
     src/world/level/block/BlockCatalog.cpp
     src/world/level/block/Blocks.cpp
+    src/world/level/block/Waterlog.cpp
     src/world/level/chunk/Chunk.cpp
     src/world/level/chunk/ChunkManager.cpp
     src/world/level/levelgen/Backends.cpp

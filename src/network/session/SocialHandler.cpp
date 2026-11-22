@@ -98,6 +98,8 @@ namespace perlite {
                                                 : proto::PermissionLevel::Member;
         add.commandPermission = other.isOperator ? proto::CommandPermissionLevel::Operator
                                                  : proto::CommandPermissionLevel::Normal;
+        // The last field is always read by the game: the other player's platform.
+        add.deviceOs = static_cast<proto::DeviceOS>(other.buildPlatform);
         Send(add);
     }
 

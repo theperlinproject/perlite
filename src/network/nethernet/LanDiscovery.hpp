@@ -8,6 +8,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace perlite::nethernet {
 
@@ -86,6 +87,7 @@ namespace perlite::nethernet {
         void Broadcast(const std::string& datagram);
 
         intptr_t sock = -1;
+        intptr_t replySock = -1;
         uint16_t port = lan::kPort;
         uint64_t networkId = 0;
         Callbacks callbacks;
@@ -93,5 +95,6 @@ namespace perlite::nethernet {
         std::thread thread;
         std::mutex mutex;
         std::unordered_map<uint64_t, PeerAddress> addresses;
+        std::unordered_set<std::string> rebroadcast;
     };
 }

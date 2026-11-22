@@ -41,6 +41,8 @@ namespace perlite {
         TerrainBackend& Backend() { return *backend; }
 
         std::shared_ptr<ChunkEntry> Get(ChunkPos pos);
+        // Like Get, but the request is kept even when no player is near the chunk (portal trips).
+        std::shared_ptr<ChunkEntry> Request(ChunkPos pos);
         std::shared_ptr<ChunkEntry> Peek(ChunkPos pos) const;
         std::shared_ptr<ChunkEntry> Load(ChunkPos pos);
 
@@ -54,6 +56,9 @@ namespace perlite {
         const ChunkColumn* Column(int chunkX, int chunkZ) const { return FindColumn(chunkX, chunkZ); }
 
         bool SetBlock(int x, int y, int z, uint16_t block);
+        // The second (liquid) layer: the water around a waterlogged block.
+        uint16_t GetLiquid(int x, int y, int z) const;
+        bool SetLiquid(int x, int y, int z, uint16_t block);
 
         size_t Loaded() const { return chunks.size(); }
 

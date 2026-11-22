@@ -11,6 +11,7 @@
 #include "network/Batch.hpp"
 #include "protocol/Packets.hpp"
 #include "server/Server.hpp"
+#include "world/actor/ActorManager.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -66,6 +67,7 @@ namespace {
                             x = p.playerPosition.x;
                             y = p.playerPosition.y;
                             z = p.playerPosition.z;
+                            runtimeId = p.runtimeEntityId;
                             started = true;
                         }
                     }
@@ -92,6 +94,7 @@ namespace {
         bool corrupt = false, started = false;
         uint64_t bytes = 0, packets = 0, chunks = 0;
         double x = 0, y = 0, z = 0;
+        uint64_t runtimeId = 0;
     };
 
     struct Stats {
@@ -125,6 +128,8 @@ int main(int argc, char** argv) {
     const int walkTicks = argc > 3 ? std::atoi(argv[3]) : 400;
     const int mobsPerPlayer = argc > 4 ? std::atoi(argv[4]) : 20;
     const std::string generator = argc > 5 ? argv[5] : "vanilla";
+    // Optional: a cube of this many TNT blocks next to the first player, lit, while everything else runs.
+    const int tntCount = argc > 6 ? std::atoi(argv[6]) : 0;
 
     ServerConfig config;
     config.gameMode = 0;
@@ -137,7 +142,10 @@ int main(int argc, char** argv) {
     config.maxPlayers = std::max(players, 10);
     config.seed = 12345;
     config.dataDir = (fs::temp_directory_path() / "perlite_load_bench").string();
-    config.worldStorage = "none";
+    // BENCH_STORAGE=1 saves the world to disk as a real server does (chunk saves, autosave).
+    config.worldStorage = std::getenv("BENCH_STORAGE") ? "leveldb" : "none";
+    if (std::getenv("BENCH_STORAGE"))
+        config.autosaveSeconds = 5;
     config.downloadVanillaPack = false;
     fs::remove_all(config.dataDir);
     fs::create_directories(config.dataDir);
@@ -229,6 +237,13 @@ int main(int argc, char** argv) {
     while (!loaded() && Clock::now() - loadBegin < std::chrono::seconds(180))
         pumpAll(1, &load);
     const double loadSeconds = std::chrono::duration<double>(Clock::now() - loadBegin).count();
+    // Tell the server the players are in the world, as the game does once it has spawned them.
+    for (auto& c : clients) {
+        proto::SetLocalPlayerAsInitializedPacket ready;
+        ready.runtimeEntityId = c->runtimeId;
+        c->Send(ready);
+    }
+    pumpAll(2, nullptr);
     uint64_t loadChunks = 0, loadBytes = 0;
     for (auto& c : clients) {
         loadChunks += c->chunks;
@@ -252,10 +267,12 @@ int main(int argc, char** argv) {
         bytesBefore += c->bytes;
     }
     const auto walkBegin = Clock::now();
+    // BENCH_SPEED multiplies the walking speed (5 is about a fast spectator flight).
+    const double speed = std::getenv("BENCH_SPEED") ? std::atof(std::getenv("BENCH_SPEED")) : 1.0;
     for (int t = 0; t < walkTicks; t++) {
         for (size_t i = 0; i < clients.size(); i++) {
             const double angle = 2.0 * std::numbers::pi * static_cast<double>(i) / static_cast<double>(clients.size());
-            clients[i]->Move(tick, std::cos(angle) * 0.28, std::sin(angle) * 0.28);
+            clients[i]->Move(tick, std::cos(angle) * 0.28 * speed, std::sin(angle) * 0.28 * speed);
         }
         pumpAll(1, &walk);
     }
@@ -270,6 +287,11 @@ int main(int argc, char** argv) {
                 static_cast<double>(chunksAfter - chunksBefore) / walkSeconds,
                 static_cast<double>(bytesAfter - bytesBefore) / 1e6 / walkSeconds);
     walk.Print("walk");
+    if (std::getenv("BENCH_DEBUG"))
+        for (auto& c : clients)
+            std::printf("  %s: %llu bytes, %llu packets, %llu chunks\n", c->name.c_str(),
+                        static_cast<unsigned long long>(c->bytes), static_cast<unsigned long long>(c->packets),
+                        static_cast<unsigned long long>(c->chunks));
 
     // Mobs: summon around each player, then let them run.
     for (auto& c : clients)
@@ -288,6 +310,63 @@ int main(int argc, char** argv) {
         pumpAll(1, &mobs);
     }
     mobs.Print("mobs");
+
+    if (tntCount > 0 && !clients.empty()) {
+        const int side = std::max(2, static_cast<int>(std::cbrt(static_cast<double>(tntCount))));
+        const int height = std::max(1, tntCount / (side * side));
+        const int bx = static_cast<int>(std::floor(clients[0]->x)) + 12;
+        const int bz = static_cast<int>(std::floor(clients[0]->z)) - side / 2;
+        const int by = static_cast<int>(std::floor(clients[0]->y)) - height / 2;
+        int placed = 0;
+        for (int y0 = by; y0 < by + height; y0 += 30)
+            for (int x0 = bx; x0 < bx + side; x0 += 30)
+                for (int z0 = bz; z0 < bz + side; z0 += 30) {
+                    char line[200];
+                    const int x1 = std::min(bx + side, x0 + 30) - 1, y1 = std::min(by + height, y0 + 30) - 1,
+                              z1 = std::min(bz + side, z0 + 30) - 1;
+                    std::snprintf(line, sizeof line, "fill %d %d %d %d %d %d tnt", x0, y0, z0, x1, y1, z1);
+                    server.RunConsoleCommand(line);
+                    placed += (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1);
+                }
+        pumpAll(2, nullptr);
+        char light[160];
+        std::snprintf(light, sizeof light, "summon tnt %d %d %d", bx + side / 2, by + height / 2, bz + side / 2);
+        server.RunConsoleCommand(light);
+        Stats tnt;
+        uint64_t bytesBefore = 0;
+        for (auto& c : clients)
+            bytesBefore += c->bytes;
+        const auto t0 = Clock::now();
+        size_t peak = 0;
+        int ticks = 0;
+        for (; ticks < 2400; ticks++) {
+            for (auto& c : clients)
+                c->Move(tick, 0.0, 0.0);
+            pumpAll(1, &tnt);
+            size_t primed = 0;
+            for (const Mob& m : server.Mobs().All())
+                primed += m.kind == actorkind::PrimedTnt;
+            peak = std::max(peak, primed);
+            if (primed == 0 && ticks > 20)
+                break;
+        }
+        uint64_t bytesAfter = 0;
+        for (auto& c : clients)
+            bytesAfter += c->bytes;
+        std::printf("tnt: %d placed (%dx%dx%d), done after %d ticks (%.1f s), peak %zu primed at once, %.1f MB sent\n",
+                    placed, side, height, side, ticks, std::chrono::duration<double>(Clock::now() - t0).count(), peak,
+                    static_cast<double>(bytesAfter - bytesBefore) / 1e6);
+        tnt.Print("tnt");
+        if (std::getenv("BENCH_DEBUG")) {
+            int shown = 0;
+            for (const Mob& m : server.Mobs().All())
+                if (m.kind == actorkind::PrimedTnt && shown++ < 5)
+                    std::printf("  left: tnt at %.1f %.1f %.1f fuse %d loaded %d\n", m.x, m.y, m.z, m.fuse,
+                                server.Chunks().Peek({static_cast<int>(std::floor(m.x)) >> 4,
+                                                      static_cast<int>(std::floor(m.z)) >> 4}) != nullptr);
+            std::printf("  players at %.1f %.1f %.1f\n", clients[0]->x, clients[0]->y, clients[0]->z);
+        }
+    }
     all.Print("all");
     server.Stop();
     return 0;

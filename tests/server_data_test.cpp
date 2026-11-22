@@ -9,6 +9,8 @@
 #include "world/level/block/VoxelShapes.hpp"
 #include "world/level/block/BlockCatalog.hpp"
 #include "world/level/chunk/Chunk.hpp"
+#include "world/level/block/Waterlog.hpp"
+#include "world/level/storage/WorldStorage.hpp"
 #include "world/level/chunk/ChunkManager.hpp"
 #include "world/level/levelgen/Generator.hpp"
 
@@ -283,6 +285,41 @@ static void TestChunkQueueOrder() {
     CHECK(world.Peek({40, 40}) != nullptr);
 }
 
+
+// Kelp and seagrass always get water in the second layer; a fence only when water touches it; the
+// layer goes into the network chunk and through the disk format.
+static void TestWaterlogging() {
+    BlockCatalog& catalog = BlockCatalog::Instance();
+    catalog.LoadBuiltin();
+    const uint16_t water = catalog.DefaultBlock("minecraft:water");
+    const uint16_t seagrass = catalog.DefaultBlock("minecraft:seagrass");
+    const uint16_t fence = catalog.DefaultBlock("minecraft:oak_fence");
+    const uint16_t stone = catalog.DefaultBlock("minecraft:stone");
+    ChunkColumn c;
+    for (int x = 0; x < 16; x++)
+        for (int z = 0; z < 16; z++)
+            c.Set(x, 0, z, stone);
+    c.Set(3, 1, 3, seagrass);
+    c.Set(8, 1, 8, fence);
+    c.Set(9, 1, 8, water);
+    c.Set(12, 1, 12, fence);
+    waterlog::FillGenerated(c);
+    CHECK(c.GetLiquid(3, 1, 3) == water);
+    CHECK(c.GetLiquid(8, 1, 8) == water);
+    CHECK(c.GetLiquid(12, 1, 12) == 0);
+    std::vector<uint8_t> net;
+    c.EncodeNetwork(net);
+    const int section = (1 - kMinY) >> 4;
+    std::string disk;
+    WorldStorage::EncodeSubChunk(c, section, section + (kMinY >> 4), disk);
+    std::vector<uint16_t> cells(kCells), liquid(kCells);
+    uint16_t uniform = 0;
+    bool isUniform = false, hasLiquid = false;
+    CHECK(WorldStorage::DecodeSubChunk(disk, cells.data(), uniform, isUniform, liquid.data(), &hasLiquid));
+    CHECK(hasLiquid && liquid[static_cast<size_t>(CellIndex(3, 1 & 15, 3))] == water);
+    CHECK(disk.size() > 3 && disk[1] == 2);
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr, "usage: server_data_test <source dir>\n");
@@ -294,6 +331,7 @@ int main(int argc, char** argv) {
     TestChunkEncoding();
     TestChunkQueueOrder();
     TestVoxelShapes();
+    TestWaterlogging();
     const char* pack = std::getenv("PERLITE_VANILLA_PACK");
     if (pack && *pack) {
         TestVanillaEntities(pack);

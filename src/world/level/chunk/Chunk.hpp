@@ -73,6 +73,10 @@ namespace perlite {
             return hasQuartBiomes ? quartBiomes[static_cast<size_t>(QuartIndex(qx, qy, qz))]
                                   : genBiomes[static_cast<size_t>((qx * 4 + 1) * 16 + qz * 4 + 1)];
         }
+        uint8_t QuartNet(int qx, int qy, int qz) const {
+            return hasQuartBiomes ? quartNet[static_cast<size_t>(QuartIndex(qx, qy, qz))]
+                                  : netBiomes[static_cast<size_t>((qx * 4 + 1) * 16 + qz * 4 + 1)];
+        }
         void SetQuartBiomes(const uint8_t* tableIndices, const uint8_t* networkIds) {
             std::copy_n(tableIndices, quartBiomes.size(), quartBiomes.begin());
             std::copy_n(networkIds, quartNet.size(), quartNet.begin());
@@ -80,12 +84,23 @@ namespace perlite {
         }
         ChunkColumn Clone() const;
 
+        // The second block layer of each section, which holds the water around waterlogged blocks
+        // (kelp, seagrass, a slab placed in water). Sections without any have no storage for it.
+        uint16_t GetLiquid(int x, int y, int z) const;
+        void SetLiquid(int x, int y, int z, uint16_t block);
+        bool HasLiquid(int section) const { return liquids[static_cast<size_t>(section)] != nullptr; }
+        const std::array<uint16_t, kCells>* LiquidSection(int section) const {
+            return liquids[static_cast<size_t>(section)].get();
+        }
+        void SetLiquidSection(int section, const uint16_t* cells);
+
         uint64_t version = 0;
 
         void EncodeNetwork(std::vector<uint8_t>& out, int dimension = kOverworld) const;
 
     private:
         std::array<Section, kSections> sections;
+        std::array<std::unique_ptr<std::array<uint16_t, kCells>>, kSections> liquids;
         std::array<uint8_t, 256> genBiomes{};
         std::array<uint8_t, 4 * 4 * kHeight / 4> quartBiomes{};
         std::array<uint8_t, 4 * 4 * kHeight / 4> quartNet{};

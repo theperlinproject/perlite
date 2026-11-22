@@ -1,5 +1,7 @@
 #include "server/Server.hpp"
 
+#include <fstream>
+
 #include "common/Log.hpp"
 #include "world/level/storage/WorldStorage.hpp"
 
@@ -54,8 +56,34 @@ namespace perlite {
                     std::to_string(static_cast<int64_t>(config.seed)) + ")");
         }
         storage = std::move(world);
+        LoadPortals();
         lastSave = std::chrono::steady_clock::now();
         return true;
+    }
+
+    // Nether portals are remembered in portals.txt in the world folder, one per line:
+    // dimension x y z axis width height. Travel after a restart then finds the portal it made.
+    void Server::LoadPortals() {
+        if (!storage)
+            return;
+        std::ifstream in(fs::path(storage->Directory()) / "portals.txt");
+        PortalFrame f;
+        while (in >> f.dimension >> f.x >> f.y >> f.z >> f.axis >> f.width >> f.height)
+            if (f.dimension >= 0 && f.dimension < kDimensionCount && f.width > 0 && f.height > 0)
+                portals.push_back(f);
+    }
+
+    void Server::SavePortals() {
+        if (!storage)
+            return;
+        const fs::path path = fs::path(storage->Directory()) / "portals.txt";
+        std::ofstream out(path.string() + ".tmp", std::ios::trunc);
+        for (const PortalFrame& f : portals)
+            out << f.dimension << ' ' << f.x << ' ' << f.y << ' ' << f.z << ' ' << f.axis << ' ' << f.width << ' '
+                << f.height << '\n';
+        out.close();
+        std::error_code ec;
+        fs::rename(path.string() + ".tmp", path, ec);
     }
 
     LevelInfo Server::CurrentLevelInfo() const {
@@ -96,6 +124,9 @@ namespace perlite {
             if (w)
                 chunksSaved += w->SaveDirty();
         SaveContainers();
+        SavePortals();
+        if (announce)
+            storage->DrainSaves();
         storage->SaveLevel(CurrentLevelInfo());
         std::string error;
         if (!storage->Flush(&error) && !error.empty())

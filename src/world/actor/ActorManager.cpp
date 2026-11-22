@@ -85,13 +85,9 @@ namespace perlite {
 
     Mob* ActorManager::Spawn(const std::string& identifier, double x, double y, double z, bool persistent) {
         Mob m;
-        if (identifier == "minecraft:arrow" || identifier == "arrow") {
-            static const MobDef arrow{"minecraft:arrow", 0.25f, 0.25f, 1, 0, 2, 0, "", "", ""};
-            m.def = &arrow;
-            m.projectile = true;
-        } else {
-            m.def = FindMob(identifier.c_str());
-        }
+        if (identifier == "minecraft:arrow" || identifier == "arrow")
+            return SpawnProjectile(projectile::Arrow, x, y, z, 0, 0, 0, 0, false);
+        m.def = FindMob(identifier.c_str());
         if (!m.def)
             return nullptr;
         if (!m.projectile && server.HookEntitySpawn(m.def->id, nextId, x, y, z, !persistent))
@@ -288,6 +284,8 @@ namespace perlite {
             return TickPrimedTnt(m);
         case actorkind::ExperienceOrb:
             return TickExperienceOrb(m);
+        case actorkind::Projectile:
+            return TickShot(m);
         default:
             return true;
         }

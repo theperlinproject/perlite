@@ -407,6 +407,16 @@ int main(int argc, char** argv) {
         use.face = 1;
         use.hotbarSlot = 0;
         place.transaction.transactionData = use;
+        {
+            // Step off the spot first: a block cannot be placed where a player stands.
+            proto::PlayerAuthInputPacket aside;
+            aside.position = {4.5f, -58.38f, 4.5f};
+            alice.Send(aside);
+            alice.Settle();
+            bob.Settle();
+            alice.inbox.clear();
+            bob.inbox.clear();
+        }
         alice.Send(place);
         alice.Settle();
         bob.Settle();
@@ -1185,6 +1195,154 @@ int main(int argc, char** argv) {
                 stopped |= e.event == proto::LevelEventPacketEvent::BlockStopBreak;
             CHECK(stopped);
             CHECK(survival.GetBlock(2, -60, 2, n) == perlin::abi::Status::Ok && n == "minecraft:stone");
+        }
+
+        // Breaking a block in survival drops it as an item next to the block.
+        {
+            const uint16_t dirt = BlockCatalog::Instance().DefaultBlock("minecraft:dirt");
+            survival.World(0).SetBlock(1, -60, 1, dirt);
+            carol.inbox.clear();
+            proto::PlayerAuthInputPacket in;
+            in.position = {0.5f, -58.38f, 0.5f};
+            in.tick = 5;
+            proto::PlayerAuthInputPacketBlockActionEntry br;
+            br.action = proto::Action::PredictBreak;
+            br.position = {1, -60, 1};
+            br.face = 1;
+            in.blockAction = std::vector{br};
+            carol.Send(in);
+            carol.Settle();
+            const auto items = carol.Take<proto::AddItemEntityPacket>();
+            if (items.empty())
+                std::printf("survival break dropped no item\n");
+            CHECK(!items.empty());
+            CHECK(survival.GetBlock(1, -60, 1, n) == perlin::abi::Status::Ok && n == "minecraft:air");
+            if (!items.empty()) {
+                const uint64_t itemId = items[0].runtimeEntityId;
+                carol.Settle(60);
+                float ix = items[0].position.x, iz = items[0].position.z;
+                for (const auto& mv : carol.Take<proto::MoveEntityPacket>())
+                    if (mv.runtimeEntityId == itemId) {
+                        ix = mv.position.x;
+                        iz = mv.position.z;
+                    }
+                proto::PlayerAuthInputPacket walk;
+                walk.position = {ix, -58.38f, iz};
+                walk.tick = 70;
+                carol.Send(walk);
+                carol.Settle(10);
+                const auto taken = carol.Take<proto::TakeItemEntityPacket>();
+                CHECK(!taken.empty());
+            }
+        }
+
+        // Placed blocks face the player, slabs keep the water they are placed in, flint and steel
+        // lights fire, and no solid block goes where the player stands.
+        {
+            const auto placeWith = [&](const char* item, int bx, int by, int bz, int face, float clickY, float yaw) {
+                CHECK(survival.GiveItem(1, item, 1) == 0);
+                Session* c = survival.FindSession(1);
+                if (c)
+                    for (int slot = 0; slot < PlayerInventory::kMainSlots; slot++)
+                        if (!c->Inventory().main[slot].Empty() &&
+                            BlockCatalog::Instance().ItemById(c->Inventory().main[slot].networkId)->name == std::string("minecraft:") + item) {
+                            std::swap(c->Inventory().main[0], c->Inventory().main[slot]);
+                            break;
+                        }
+                proto::PlayerAuthInputPacket look;
+                look.position = {0.5f, -58.38f, 0.5f};
+                look.yaw = yaw;
+                look.headYaw = yaw;
+                carol.Send(look);
+                carol.Settle();
+                proto::InventoryTransactionPacket t;
+                t.transaction.transactionType = proto::TransactionTransactionType::ItemUse;
+                proto::TransactionUseItem u;
+                u.actionType = proto::TransactionUseItemActionType::ClickBlock;
+                u.blockPosition = {bx, by, bz};
+                u.face = static_cast<uint8_t>(face);
+                u.hotbarSlot = 0;
+                u.clickPos = {0.5f, clickY, 0.5f};
+                t.transaction.transactionData = u;
+                carol.Send(t);
+                carol.Settle();
+            };
+            const auto stateOf = [&](int bx, int by, int bz) {
+                return BlockCatalog::Instance().StateText(survival.World(0).GetBlock(bx, by, bz));
+            };
+            // Looking north (yaw 180): a furnace faces the player, south.
+            placeWith("furnace", 3, -61, 0, 1, 1.0f, 180.0f);
+            CHECK(stateOf(3, -60, 0).contains("cardinal_direction=south"));
+            // Stairs placed looking east, on the upper half of a side face, are upside down.
+            survival.World(0).SetBlock(5, -60, 0, BlockCatalog::Instance().DefaultBlock("minecraft:stone"));
+            placeWith("oak_stairs", 5, -60, 0, 4, 0.8f, 270.0f);
+            const std::string stairs = stateOf(4, -60, 0);
+            CHECK(stairs.contains("weirdo_direction=0") && stairs.contains("upside_down_bit=true"));
+            // A slab placed into still water keeps the water in the second layer.
+            const uint16_t water = BlockCatalog::Instance().DefaultBlock("minecraft:water");
+            survival.World(0).SetBlock(0, -60, 4, water);
+            placeWith("oak_slab", 0, -61, 4, 1, 1.0f, 0.0f);
+            CHECK(stateOf(0, -60, 4).starts_with("minecraft:oak_slab"));
+            CHECK(survival.World(0).GetLiquid(0, -60, 4) == water);
+            // Breaking it leaves the water behind.
+            CHECK(survival.PlayerBreak(*survival.FindSession(1), 0, -60, 4));
+            CHECK(survival.World(0).GetBlock(0, -60, 4) == water && survival.World(0).GetLiquid(0, -60, 4) == 0);
+            // Stone cannot be placed into the player.
+            placeWith("stone", 0, -61, 0, 1, 1.0f, 0.0f);
+            CHECK(survival.World(0).GetBlock(0, -60, 0) == BlockRegistry::kAir);
+            // Flint and steel sets fire on the ground.
+            placeWith("flint_and_steel", -3, -61, -3, 1, 1.0f, 0.0f);
+            CHECK(stateOf(-3, -60, -3).starts_with("minecraft:fire"));
+        }
+
+        // Projectiles: a thrown snowball shows up and flies; an arrow sticks in the ground and the
+        // player standing on it picks it up.
+        {
+            carol.inbox.clear();
+            CHECK(survival.GiveItem(1, "snowball", 1) == 0);
+            Session* c = survival.FindSession(1);
+            CHECK(c != nullptr);
+            if (c) {
+                for (int slot = 0; slot < PlayerInventory::kMainSlots; slot++)
+                    if (!c->Inventory().main[slot].Empty() &&
+                        BlockCatalog::Instance().ItemById(c->Inventory().main[slot].networkId)->name == "minecraft:snowball")
+                        std::swap(c->Inventory().main[0], c->Inventory().main[slot]);
+                c->Inventory().selected = 0;
+                proto::PlayerAuthInputPacket look;
+                look.position = {0.5f, -58.38f, 0.5f};
+                look.pitch = -30.0f;
+                carol.Send(look);
+                carol.Settle();
+                proto::InventoryTransactionPacket t;
+                t.transaction.transactionType = proto::TransactionTransactionType::ItemUse;
+                proto::TransactionUseItem u;
+                u.actionType = proto::TransactionUseItemActionType::ClickAir;
+                u.hotbarSlot = 0;
+                t.transaction.transactionData = u;
+                carol.Send(t);
+                carol.Settle(3);
+                bool snowball = false;
+                for (const auto& a : carol.Take<proto::AddEntityPacket>())
+                    snowball |= a.entityType == "minecraft:snowball";
+                CHECK(snowball);
+                CHECK(c->Inventory().main[0].Empty());
+
+                Mob* arrow = survival.Mobs().SpawnProjectile(projectile::Arrow, -1.5, -55.0, 2.5, 0.0, -1.0, 0.0, 999, true);
+                CHECK(arrow != nullptr);
+                const uint64_t arrowId = arrow ? arrow->id : 0;
+                carol.Settle(10);
+                const Mob* stuck = survival.Mobs().Find(arrowId);
+                CHECK(stuck && stuck->stuck && stuck->y < -59.9 && stuck->y > -61.0);
+                proto::PlayerAuthInputPacket walk;
+                walk.position = {-1.5f, -58.38f, 2.5f};
+                carol.Send(walk);
+                carol.Settle(3);
+                bool picked = false;
+                for (const auto& tk : carol.Take<proto::TakeItemEntityPacket>())
+                    picked |= tk.target == arrowId;
+                CHECK(picked);
+                CHECK(survival.Mobs().Find(arrowId) == nullptr);
+            }
         }
 
         // Random ticks grow crops on farmland near players.

@@ -328,6 +328,21 @@ namespace perlite::nethernet {
             return false;
         }
         sock = static_cast<intptr_t>(s);
+        // Everything we send goes out of a second socket on a port of its own, so the game's replies
+        // (sent back to where our response came from) reach us even when a game on this machine
+        // shares port 7551 with the listening socket.
+        const SocketHandle r = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if (Valid(static_cast<intptr_t>(r))) {
+            ::setsockopt(r, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&yes), sizeof(yes));
+            sockaddr_in any{};
+            any.sin_family = AF_INET;
+            any.sin_port = 0;
+            any.sin_addr.s_addr = htonl(INADDR_ANY);
+            if (::bind(r, reinterpret_cast<sockaddr*>(&any), sizeof(any)) == 0)
+                replySock = static_cast<intptr_t>(r);
+            else
+                PERLITE_CLOSE_SOCKET(r);
+        }
         running = true;
         thread = std::thread([this] {
             SetLogThreadName("LAN");
@@ -344,35 +359,48 @@ namespace perlite::nethernet {
         if (Valid(sock))
             PERLITE_CLOSE_SOCKET(Sock(sock));
         sock = -1;
+        if (Valid(replySock))
+            PERLITE_CLOSE_SOCKET(Sock(replySock));
+        replySock = -1;
     }
 
     void LanDiscovery::Loop() {
         std::string buf(65536, '\0');
         while (running) {
+            const intptr_t socks[2] = {sock, replySock};
+            const int count = Valid(replySock) ? 2 : 1;
 #ifdef _WIN32
-            WSAPOLLFD pfd{};
-            pfd.fd = Sock(sock);
-            pfd.events = POLLRDNORM;
-            if (WSAPoll(&pfd, 1, 250) <= 0)
+            WSAPOLLFD pfd[2]{};
+            for (int i = 0; i < count; i++) {
+                pfd[i].fd = Sock(socks[i]);
+                pfd[i].events = POLLRDNORM;
+            }
+            if (WSAPoll(pfd, static_cast<ULONG>(count), 250) <= 0)
                 continue;
 #else
-            pollfd pfd{};
-            pfd.fd = Sock(sock);
-            pfd.events = POLLIN;
-            if (::poll(&pfd, 1, 250) <= 0)
+            pollfd pfd[2]{};
+            for (int i = 0; i < count; i++) {
+                pfd[i].fd = Sock(socks[i]);
+                pfd[i].events = POLLIN;
+            }
+            if (::poll(pfd, static_cast<nfds_t>(count), 250) <= 0)
                 continue;
 #endif
-            sockaddr_in from{};
-            socklen_t len = sizeof(from);
-            const int n = static_cast<int>(::recvfrom(Sock(sock), buf.data(), static_cast<int>(buf.size()), 0,
-                                                      reinterpret_cast<sockaddr*>(&from), &len));
-            if (n <= 0)
-                continue;
-            try {
-                Handle(buf.substr(0, static_cast<size_t>(n)),
-                       std::string(reinterpret_cast<const char*>(&from), sizeof(from)));
-            } catch (const std::exception& e) {
-                LogWarn(std::string("lan discovery: ") + e.what());
+            for (int i = 0; i < count; i++) {
+                if (!(pfd[i].revents & (POLLIN | POLLRDNORM)))
+                    continue;
+                sockaddr_in from{};
+                socklen_t len = sizeof(from);
+                const int n = static_cast<int>(::recvfrom(Sock(socks[i]), buf.data(), static_cast<int>(buf.size()), 0,
+                                                          reinterpret_cast<sockaddr*>(&from), &len));
+                if (n <= 0)
+                    continue;
+                try {
+                    Handle(buf.substr(0, static_cast<size_t>(n)),
+                           std::string(reinterpret_cast<const char*>(&from), sizeof(from)));
+                } catch (const std::exception& e) {
+                    LogWarn(std::string("lan discovery: ") + e.what());
+                }
             }
         }
     }
@@ -381,8 +409,26 @@ namespace perlite::nethernet {
         uint16_t id = 0;
         uint64_t sender = 0;
         std::string body;
-        if (!lan::Decode(datagram, id, sender, body) || sender == networkId)
+        if (!lan::Decode(datagram, id, sender, body))
             return;
+        if (sender == networkId) {
+            // A game on this machine shares port 7551 with us, and the system handed our own unicast
+            // message to our socket instead of the game's. Send it again as a broadcast, which every
+            // socket on the port gets (other games ignore it: messages name their recipient). The
+            // broadcast copy comes back here too and is dropped.
+            if (id != lan::kMessage)
+                return;
+            std::lock_guard lock(mutex);
+            if (const auto it = rebroadcast.find(datagram); it != rebroadcast.end()) {
+                rebroadcast.erase(it);
+                return;
+            }
+            if (rebroadcast.size() > 256)
+                rebroadcast.clear();
+            rebroadcast.insert(datagram);
+            Broadcast(datagram);
+            return;
+        }
         if (id != lan::kRequest && sender != 0) {
             std::lock_guard lock(mutex);
             const auto now = std::chrono::steady_clock::now();
@@ -429,9 +475,10 @@ namespace perlite::nethernet {
     }
 
     void LanDiscovery::SendTo(const std::string& datagram, const std::string& toRaw) {
-        if (!Valid(sock) || datagram.empty())
+        const intptr_t out = Valid(replySock) ? replySock : sock;
+        if (!Valid(out) || datagram.empty())
             return;
-        ::sendto(Sock(sock), datagram.data(), static_cast<int>(datagram.size()), 0,
+        ::sendto(Sock(out), datagram.data(), static_cast<int>(datagram.size()), 0,
                  reinterpret_cast<const sockaddr*>(toRaw.data()), static_cast<socklen_t>(toRaw.size()));
     }
 

@@ -87,7 +87,7 @@ namespace perlite {
         void ShowArmor(const Session& wearer);
         bool EquipHeldArmor();
         void HidePlayer(const Session& other);
-        void SendBlockUpdate(int x, int y, int z, int32_t networkId);
+        void SendBlockUpdate(int x, int y, int z, int32_t networkId, uint32_t layer = 0);
         void ShowItem(const ItemEntity& item);
         void HideItem(uint64_t id);
         void PlaySound(const std::string& sound, double x, double y, double z, int extra = -1);
@@ -195,6 +195,7 @@ namespace perlite {
         float Absorption() const { return absorption; }
         void SetHealth(float value);
         void SetVelocity(double x, double y, double z);
+        bool ThrowHeld();
         void SetSpawnPoint(int x, int y, int z);
         void Transfer(const std::string& host, uint16_t port);
         uint32_t ShowForm(const std::string& json);
@@ -333,6 +334,7 @@ namespace perlite {
         int fireTicks = 0;
         int envTicks = 0;
         int useTicks = -1;
+        uint64_t pearlReadyAt = 0;
         int useSlot = -1;
         int16_t useItem = 0;
         struct HandScope {

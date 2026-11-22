@@ -252,9 +252,10 @@ namespace perlite {
         health = 0;
         StopUsing();
         SendAttributes();
-        for (Session* s : server.InGamePlayers())
-            if (s != this)
-                s->MobEvent(runtimeId, 3, 0);
+        // Every viewer, the dying player included, gets the death event: a client in creative or
+        // spectator ignores a health of zero and only shows the death screen on this event.
+        for (Session* s : server.PlayersIn(dimension))
+            s->MobEvent(runtimeId, 3, 0);
         if (!server.RuleValue("keepinventory")) {
             const auto drop = [&](ItemStack& slot) {
                 if (slot.Empty())
@@ -346,6 +347,9 @@ namespace perlite {
             message = name + " died";
             break;
         }
+        proto::DeathInfoPacket info;
+        info.cause = message;
+        Send(info);
         if (server.RuleValue("showdeathmessages"))
             server.Broadcast(message);
         else

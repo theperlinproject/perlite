@@ -150,7 +150,13 @@ namespace perlite {
         void DropBlockLoot(int dimension, int x, int y, int z, uint16_t block, const std::string& tool,
                            float explosionRadius, Session* by, int fortune = 0, int silkTouch = 0);
         void SpawnXp(int dimension, double x, double y, double z, int amount);
-        bool PlayerPlace(Session& by, int x, int y, int z, int face);
+        bool PlayerPlace(Session& by, int x, int y, int z, int face, double clickX = 0.5, double clickY = 0.5,
+                         double clickZ = 0.5);
+        uint16_t PlacementState(Session& by, uint16_t base, int face, double clickY, int& extraFace);
+        void SetLiquidAt(int dimension, int x, int y, int z, uint16_t liquid);
+        // Sets fire to an air block that has something to burn or stand on.
+        bool LightFire(int dimension, int x, int y, int z);
+        void BreakPartner(int dimension, int x, int y, int z, uint16_t broken);
         void SendBlockTo(Session& to, int x, int y, int z);
         void DropFromPlayer(Session& by, const ItemStack& stack);
         void SpawnItem(const ItemStack& stack, double x, double y, double z, double vx, double vy, double vz,
@@ -341,16 +347,27 @@ namespace perlite {
         bool FindPortalFrame(int dimension, int x, int y, int z, int axis, PortalFrame& out);
         void FillPortal(const PortalFrame& frame);
         bool PlacePortalNear(int dimension, int x, int y, int z, PortalFrame& out);
+        // A lit nether portal already in the world near (x, z), found by looking at its blocks.
+        bool FindPortalNear(int dimension, int x, int y, int z, int reach, PortalFrame& out);
+        void LoadPortals();
+        void SavePortals();
         std::vector<PortalFrame> portals;
         void TickPortals();
         void TickGravity();
+        void TickFire();
+        void ScheduleFire(int dimension, int x, int y, int z);
         // Random block ticks around players: crops, saplings, grass, leaves and the rest of the
         // blocks that change by themselves over time.
         void TickRandom();
         void RandomTickBlock(int dimension, int x, int y, int z, std::mt19937& rng);
         bool GrowTree(int dimension, int x, int y, int z, const std::string& kind, std::mt19937& rng);
         std::vector<std::array<int, 4>> gravityQueue;
+        struct FireTick {
+            int dimension, x, y, z, due;
+        };
+        std::vector<FireTick> fireQueue;
         void TravelThroughPortal(Session& who, bool endPortal);
+        bool PortalTargetReady(Session& who, bool endPortal);
         void BuildEndPlatform();
         bool endPlatformBuilt = false;
         void PushContainer(BlockContainer& c, bool slotsChanged);

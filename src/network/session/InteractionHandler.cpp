@@ -78,6 +78,37 @@ namespace perlite {
         proto::InventoryTransactionPacket t;
         if (!Decode(body, t) || state != State::InGame)
             return;
+        if (t.transaction.transactionType == proto::TransactionTransactionType::Normal) {
+            // Throwing the held item (Q outside the inventory screen) arrives as a normal transaction: an
+            // inventory slot that loses items plus a world-interaction action carrying what was thrown.
+            if (isVisitor || dead || gameMode == 6)
+                return;
+            const proto::TransactionActionsEntry* fromSlot = nullptr;
+            const proto::TransactionActionsEntry* thrown = nullptr;
+            for (const proto::TransactionActionsEntry& a : t.transaction.actions) {
+                if (a.sourceType == proto::TransactionActionsEntrySourceType::WorldInteraction && a.flags.value_or(0) == 0)
+                    thrown = &a;
+                else if (a.sourceType == proto::TransactionActionsEntrySourceType::Container && a.windowId.value_or(-1) == 0)
+                    fromSlot = &a;
+            }
+            if (!thrown || !fromSlot || fromSlot->slot >= PlayerInventory::kMainSlots || thrown->newItem.count == 0)
+                return;
+            ItemStack& slot = inventory.main[fromSlot->slot];
+            const int count = std::min<int>(thrown->newItem.count, slot.count);
+            if (slot.Empty() || slot.networkId != thrown->newItem.networkId || count <= 0) {
+                SendInventory();
+                return;
+            }
+            ItemStack drop = slot;
+            drop.count = static_cast<uint16_t>(count);
+            slot.count = static_cast<uint16_t>(slot.count - count);
+            if (slot.count == 0)
+                slot = ItemStack{};
+            lastActive = std::chrono::steady_clock::now();
+            server.DropFromPlayer(*this, drop);
+            SendInventory();
+            return;
+        }
         if (t.transaction.transactionType == proto::TransactionTransactionType::ItemUseOnEntity) {
             const auto* on = std::get_if<proto::TransactionTransactionDataCase1>(&t.transaction.transactionData);
             if (!on || isVisitor || gameMode == 6 || dead)
@@ -162,6 +193,8 @@ namespace perlite {
                 SendInventory();
                 break;
             }
+            if (ThrowHeld())
+                break;
             if ((sneaking && !inventory.Held().Empty()) || !server.UseBlock(*this, at.x, at.y, at.z)) {
                 if (!EquipHeldArmor()) {
                     const ItemStack& held = inventory.Held();
@@ -170,12 +203,14 @@ namespace perlite {
                         if (useTicks < 0)
                             StartUsing();
                     } else {
-                        server.PlayerPlace(*this, at.x, at.y, at.z, use->face);
+                        server.PlayerPlace(*this, at.x, at.y, at.z, use->face, use->clickPos.x, use->clickPos.y, use->clickPos.z);
                     }
                 }
             }
             break;
         case proto::TransactionUseItemActionType::ClickAir:
+            if (ThrowHeld())
+                break;
             if (!inventory.Held().Empty() && ItemNameOf(inventory.Held().networkId) == "minecraft:shield") {
                 shieldUp = true;
                 shieldOff = inventory.offActive;
@@ -295,21 +330,13 @@ namespace perlite {
         const double pitchRad = static_cast<double>(pitch) * 3.14159265358979323846 / 180.0;
         const double dirX = -std::sin(yawRad) * std::cos(pitchRad), dirY = -std::sin(pitchRad),
                      dirZ = std::cos(yawRad) * std::cos(pitchRad);
-        Mob* arrow = server.Mobs().Spawn("minecraft:arrow", posX + dirX * 0.5, posY - 0.1 + dirY * 0.5, posZ + dirZ * 0.5, false);
-        if (!arrow)
-            return;
         const double speed = 3.0 * charge;
-        arrow->vx = dirX * speed;
-        arrow->vy = dirY * speed;
-        arrow->vz = dirZ * speed;
-        arrow->owner = runtimeId;
-        arrow->baby = charge >= 1.0f;
-        arrow->yaw = yaw;
-        arrow->pitch = pitch;
-        for (Session* s : server.PlayersIn(dimension)) {
-            s->MobMotion(*arrow);
+        if (Mob* arrow = server.Mobs().SpawnProjectile(projectile::Arrow, posX + dirX * 0.5, posY - 0.1 + dirY * 0.5,
+                                                       posZ + dirZ * 0.5, dirX * speed, dirY * speed, dirZ * speed,
+                                                       runtimeId, gameMode != 1))
+            arrow->crit = charge >= 1.0f;
+        for (Session* s : server.PlayersIn(dimension))
             s->PlaySound("Bow", posX, posY, posZ);
-        }
         Exhaust(0.0f);
     }
 
@@ -409,5 +436,48 @@ namespace perlite {
             s->PlaySound("Burp", posX, posY, posZ);
         }
         attributesDirty = true;
+    }
+
+    // Snowballs, eggs, ender pearls and bottles o' enchanting fly from the eyes the way the player looks.
+    bool Session::ThrowHeld() {
+        const ItemStack& held = inventory.Held();
+        if (held.Empty() || dimension != kOverworld)
+            return false;
+        const std::string n = ItemNameOf(held.networkId);
+        int type = -1;
+        double speed = 1.5;
+        float aimPitch = pitch;
+        if (n == "minecraft:snowball")
+            type = projectile::Snowball;
+        else if (n == "minecraft:egg" || n == "minecraft:blue_egg" || n == "minecraft:brown_egg")
+            type = projectile::Egg;
+        else if (n == "minecraft:ender_pearl")
+            type = projectile::EnderPearl;
+        else if (n == "minecraft:experience_bottle") {
+            type = projectile::XpBottle;
+            speed = 0.7;
+            aimPitch -= 20.0f;
+        }
+        if (type < 0)
+            return false;
+        const auto now = server.TickCount();
+        if (type == projectile::EnderPearl && now < pearlReadyAt)
+            return true;
+        const double yawRad = static_cast<double>(yaw) * 3.14159265358979323846 / 180.0;
+        const double pitchRad = static_cast<double>(aimPitch) * 3.14159265358979323846 / 180.0;
+        const double dirX = -std::sin(yawRad) * std::cos(pitchRad), dirY = -std::sin(pitchRad),
+                     dirZ = std::cos(yawRad) * std::cos(pitchRad);
+        server.Mobs().SpawnProjectile(type, posX + dirX * 0.3, posY - 0.1 + dirY * 0.3, posZ + dirZ * 0.3, dirX * speed,
+                                      dirY * speed, dirZ * speed, runtimeId);
+        if (type == projectile::EnderPearl)
+            pearlReadyAt = now + 20;
+        for (Session* s : server.PlayersIn(dimension))
+            s->PlaySound("Throw", posX, posY, posZ);
+        if (gameMode != 1) {
+            inventory.TakeHeld(1);
+            SendSlot(inventory.selected);
+        }
+        lastActive = std::chrono::steady_clock::now();
+        return true;
     }
 }

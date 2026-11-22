@@ -167,6 +167,41 @@ namespace perlite {
         version++;
     }
 
+    uint16_t ChunkColumn::GetLiquid(int x, int y, int z) const {
+        if (x < 0 || x > 15 || z < 0 || z > 15 || y < kMinY || y >= kMinY + kHeight)
+            return 0;
+        const auto& layer = liquids[static_cast<size_t>((y - kMinY) >> 4)];
+        return layer ? (*layer)[static_cast<size_t>(CellIndex(x, y - kMinY, z))] : BlockRegistry::kAir;
+    }
+
+    void ChunkColumn::SetLiquid(int x, int y, int z, uint16_t block) {
+        if (x < 0 || x > 15 || z < 0 || z > 15 || y < kMinY || y >= kMinY + kHeight)
+            return;
+        auto& layer = liquids[static_cast<size_t>((y - kMinY) >> 4)];
+        if (!layer) {
+            if (block == BlockRegistry::kAir)
+                return;
+            layer = std::make_unique<std::array<uint16_t, kCells>>();
+            layer->fill(BlockRegistry::kAir);
+        }
+        (*layer)[static_cast<size_t>(CellIndex(x, y - kMinY, z))] = block;
+        if (block == BlockRegistry::kAir &&
+            std::all_of(layer->begin(), layer->end(), [](uint16_t v) { return v == BlockRegistry::kAir; }))
+            layer.reset();
+        version++;
+    }
+
+    void ChunkColumn::SetLiquidSection(int section, const uint16_t* cells) {
+        auto& layer = liquids[static_cast<size_t>(section)];
+        if (!cells || std::all_of(cells, cells + kCells, [](uint16_t v) { return v == BlockRegistry::kAir; })) {
+            layer.reset();
+            return;
+        }
+        if (!layer)
+            layer = std::make_unique<std::array<uint16_t, kCells>>();
+        std::copy(cells, cells + kCells, layer->begin());
+    }
+
     ChunkColumn ChunkColumn::Clone() const {
         ChunkColumn c;
         for (size_t i = 0; i < sections.size(); i++) {
@@ -174,6 +209,9 @@ namespace perlite {
             if (sections[i].cells)
                 c.sections[i].cells = std::make_unique<std::array<uint16_t, kCells>>(*sections[i].cells);
         }
+        for (size_t i = 0; i < liquids.size(); i++)
+            if (liquids[i])
+                c.liquids[i] = std::make_unique<std::array<uint16_t, kCells>>(*liquids[i]);
         c.genBiomes = genBiomes;
         c.netBiomes = netBiomes;
         c.quartBiomes = quartBiomes;
@@ -208,8 +246,9 @@ namespace perlite {
         out.reserve(out.size() + static_cast<size_t>(count) * 2200 + 2048);
         for (int sec = first; sec < first + count; sec++) {
             const Section& s = sections[static_cast<size_t>(sec)];
+            const auto& liquid = liquids[static_cast<size_t>(sec)];
             out.push_back(9);
-            out.push_back(1);
+            out.push_back(liquid ? 2 : 1);
             out.push_back(static_cast<uint8_t>(static_cast<int8_t>((kMinY >> 4) + sec)));
             if (s.cells) {
                 WriteBlocks(out, *s.cells, blocks);
@@ -217,6 +256,8 @@ namespace perlite {
                 out.push_back(1);  // no bits per cell: the one palette entry follows
                 PutZigzag(out, blocks.Hash(s.uniform));
             }
+            if (liquid)
+                WriteBlocks(out, *liquid, blocks);
         }
         if (!hasQuartBiomes) {
             for (int x = 0; x < 16; x++)
