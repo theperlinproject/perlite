@@ -941,6 +941,10 @@ int main(int argc, char** argv) {
         run("/testforblocks 10 -60 10 11 -60 11 20 -60 20");
         cloned = alice.Take<proto::TextPacket>();
         CHECK(!cloned.empty() && cloned[0].message.find("4 blocks compared") == 0);
+        // Namespaced entity names are accepted, as in the game.
+        run("/summon minecraft:cow 12 -60 12");
+        auto summoned = alice.Take<proto::TextPacket>();
+        CHECK(!summoned.empty() && summoned[0].message.find("Incorrect") == std::string::npos);
         run("/give Alice stone 5");
         auto lines = alice.Take<proto::TextPacket>();
         CHECK(!lines.empty() && lines[0].message.find("Gave 5 stone to Alice") == 0);

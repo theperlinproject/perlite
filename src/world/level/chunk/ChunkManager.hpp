@@ -22,6 +22,11 @@ namespace perlite {
 
         std::vector<uint8_t> payload;
         uint64_t payloadVersion = ~0ull;
+
+        // The chunk's packet, sealed (compressed) once and sent as is to every player who needs it.
+        std::vector<uint8_t> sealed;
+        uint64_t sealedVersion = ~0ull;
+        uint32_t sealedSettings = ~0u;
     };
 
     class ChunkManager {
@@ -45,6 +50,8 @@ namespace perlite {
         const std::vector<uint8_t>& Payload(ChunkEntry& entry) const;
 
         uint16_t GetBlock(int x, int y, int z) const;
+        // The loaded column of a chunk, or null.
+        const ChunkColumn* Column(int chunkX, int chunkZ) const { return FindColumn(chunkX, chunkZ); }
 
         bool SetBlock(int x, int y, int z, uint16_t block);
 
@@ -55,6 +62,10 @@ namespace perlite {
             int radius = 0;
         };
         size_t UnloadFar(const std::vector<Viewer>& viewers, int margin);
+        // The players' positions and view radii. Workers then generate the queued chunk nearest a
+        // player first, and drop queued chunks no player is within reach of any more (they are
+        // requested again if a player comes back). Without viewers the queue is first in, first out.
+        void SetViewers(std::vector<Viewer> viewers);
 
         void SetStore(ChunkStore* s) { store = s; }
         ChunkStore* Store() const { return store; }
@@ -74,6 +85,14 @@ namespace perlite {
         ChunkStore* store = nullptr;
         std::unordered_set<ChunkPos, ChunkPosHash> dirty;
         std::unordered_map<ChunkPos, std::shared_ptr<ChunkEntry>, ChunkPosHash> chunks;
+        // Bumped whenever a chunk leaves `chunks`, so cached pointers to columns can be trusted.
+        std::atomic<uint64_t> eraseEpoch{0};
+        const uint64_t instanceId = NextInstanceId();
+        static uint64_t NextInstanceId() {
+            static std::atomic<uint64_t> next{1};
+            return next.fetch_add(1);
+        }
+        const ChunkColumn* FindColumn(int chunkX, int chunkZ) const;
         std::unordered_set<ChunkPos, ChunkPosHash> edited;
         std::unordered_set<ChunkPos, ChunkPosHash> everReady;
         std::unordered_set<ChunkPos, ChunkPosHash> requested;
@@ -82,6 +101,10 @@ namespace perlite {
         mutable std::mutex mutex;
         std::condition_variable wake;
         std::deque<ChunkPos> queue;
+        std::vector<Viewer> viewers;
+        std::vector<ChunkPos> dropped;
+        std::unordered_set<ChunkPos, ChunkPosHash> pinned;  // asked for by Load: never dropped
+        bool TakeNearest(std::vector<ChunkPos>& batch, size_t take);
         std::vector<std::pair<ChunkPos, std::shared_ptr<ChunkEntry>>> done;
         bool stopping = false;
         std::unordered_map<ChunkPos, std::shared_ptr<const ChunkColumn>, ChunkPosHash> raw;

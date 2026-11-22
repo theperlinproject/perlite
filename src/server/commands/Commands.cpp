@@ -544,7 +544,11 @@ namespace perlite {
             switch (p.kind) {
             case ArgKind::Literal:
             case ArgKind::Enum: {
-                const std::string word = str::Lower(t.text);
+                std::string word = str::Lower(t.text);
+                // Identifiers may be written with the minecraft: namespace (summon minecraft:cow).
+                if (std::ranges::find(p.values, word) == p.values.end() && word.starts_with("minecraft:") &&
+                    std::ranges::find(p.values, word.substr(10)) != p.values.end())
+                    word = word.substr(10);
                 if (std::ranges::find(p.values, word) == p.values.end()) {
                     st.status = 1;
                     st.error = "Incorrect argument for command";

@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 
 #include "world/actor/ActorManager.hpp"
 #include "server/Server.hpp"
@@ -29,13 +30,11 @@ namespace perlite {
         };
 
         inline Shape ShapeOf(uint16_t id) {
-            static std::mutex mutex;
-            static std::vector<int8_t> cache;
-            {
-                std::lock_guard lock(mutex);
-                if (id < cache.size() && cache[id])
-                    return {cache[id] == 2, cache[id] == 3};
-            }
+            // One byte per block id, filled on first use: 0 unknown, 1 passable, 2 solid, 3 liquid. Two
+            // threads filling the same id write the same value.
+            static std::atomic<int8_t> cache[0x10000] = {};
+            if (const int8_t known = cache[id].load(std::memory_order_relaxed))
+                return {known == 2, known == 3};
             const std::string n = BlockRegistry::Instance().Name(id);
             int8_t kind = 1;
             if (id == 0 || n.ends_with(":air"))
@@ -60,10 +59,7 @@ namespace perlite {
                     }
                 kind = pass ? 1 : 2;
             }
-            std::lock_guard lock(mutex);
-            if (cache.size() <= id)
-                cache.resize(static_cast<size_t>(id) + 1, 0);
-            cache[id] = kind;
+            cache[id].store(kind, std::memory_order_relaxed);
             return {kind == 2, kind == 3};
         }
 

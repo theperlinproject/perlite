@@ -29,12 +29,28 @@ namespace perlite {
     }
 
     int ActorManager::SurfaceY(int x, int z) const {
-        if (!server.Chunks().Peek({x >> 4, z >> 4}))
+        const ChunkColumn* column = server.Chunks().Column(x >> 4, z >> 4);
+        if (!column)
             return kMinY - 1;
-        for (int y = kMinY + kHeight - 1; y > kMinY; y--) {
-            const uint16_t b = server.Chunks().GetBlock(x, y, z);
-            if (BlockSolid(b) || BlockLiquid(b))
-                return y + 1;
+        const int lx = x & 15, lz = z & 15;
+        // Whole sections of one passable block (usually air) are skipped without looking at cells.
+        for (int sec = kSections - 1; sec >= 0; sec--) {
+            const ChunkColumn::Section& s = column->SectionAt(sec);
+            const int base = kMinY + sec * 16;
+            if (!s.cells) {
+                if (BlockSolid(s.uniform) || BlockLiquid(s.uniform)) {
+                    const int top = base + 15;
+                    return top > kMinY ? top + 1 : kMinY - 1;
+                }
+                continue;
+            }
+            for (int y = base + 15; y >= base; y--) {
+                if (y <= kMinY)
+                    return kMinY - 1;
+                const uint16_t b = (*s.cells)[static_cast<size_t>(CellIndex(lx, y - kMinY, lz))];
+                if (BlockSolid(b) || BlockLiquid(b))
+                    return y + 1;
+            }
         }
         return kMinY - 1;
     }

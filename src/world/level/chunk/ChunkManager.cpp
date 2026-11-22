@@ -1,6 +1,8 @@
 #include "common/Log.hpp"
 #include <cstdlib>
 #include "world/level/chunk/ChunkManager.hpp"
+
+#include <climits>
 #include "world/level/storage/WorldStorage.hpp"
 
 #include <algorithm>
@@ -36,7 +38,9 @@ namespace perlite {
         if (backend->ThreadSafe()) {
             const unsigned hw = std::thread::hardware_concurrency();
 
-            threads = std::clamp<size_t>(hw > 2 ? hw - 1 : 1, 1, 16);
+            // Workers run at a lower priority than the tick thread, so on small machines every core
+            // can generate; on bigger ones one core is left to the tick and the network.
+            threads = std::clamp<size_t>(hw <= 4 ? hw : hw - 1, 1, 16);
             if (maxThreads > 0)
                 threads = std::min(threads, maxThreads);
         }
@@ -72,8 +76,12 @@ namespace perlite {
                 if (stopping)
                     return;
                 const size_t take = std::min(queue.size(), std::max<size_t>(1, backend->PreferredBatch()));
-                batch.assign(queue.begin(), queue.begin() + static_cast<std::ptrdiff_t>(take));
-                queue.erase(queue.begin(), queue.begin() + static_cast<std::ptrdiff_t>(take));
+                if (!TakeNearest(batch, take)) {
+                    batch.assign(queue.begin(), queue.begin() + static_cast<std::ptrdiff_t>(take));
+                    queue.erase(queue.begin(), queue.begin() + static_cast<std::ptrdiff_t>(take));
+                }
+                if (batch.empty())
+                    continue;
             }
             if (store) {
                 std::vector<ChunkPos> fresh;
@@ -186,6 +194,49 @@ namespace perlite {
         }
     }
 
+    void ChunkManager::SetViewers(std::vector<Viewer> v) {
+        std::lock_guard lock(mutex);
+        viewers = std::move(v);
+    }
+
+    // Called with the mutex held. Picks up to `take` queued chunks nearest a viewer and drops those out
+    // of every viewer's reach. False when there are no viewers (the caller then takes the oldest).
+    bool ChunkManager::TakeNearest(std::vector<ChunkPos>& batch, size_t take) {
+        if (viewers.empty())
+            return false;
+        constexpr int kMargin = 2;
+        const auto distance = [&](const ChunkPos& p) {
+            int best = INT_MAX;
+            for (const Viewer& v : viewers) {
+                const int dx = p.x - v.center.x, dz = p.z - v.center.z;
+                const int d2 = dx * dx + dz * dz;
+                const int reach = v.radius + kMargin;
+                if (d2 <= reach * reach)
+                    best = std::min(best, d2);
+            }
+            return best;
+        };
+        std::vector<std::pair<int, ChunkPos>> keep;
+        keep.reserve(queue.size());
+        for (const ChunkPos& p : queue) {
+            const int d = pinned.contains(p) ? -1 : distance(p);
+            if (d == INT_MAX)
+                dropped.push_back(p);
+            else
+                keep.emplace_back(d, p);
+        }
+        const size_t n = std::min(take, keep.size());
+        std::partial_sort(keep.begin(), keep.begin() + static_cast<std::ptrdiff_t>(n), keep.end(),
+                          [](const auto& a, const auto& b) { return a.first < b.first; });
+        batch.clear();
+        for (size_t i = 0; i < n; i++)
+            batch.push_back(keep[i].second);
+        queue.clear();
+        for (size_t i = n; i < keep.size(); i++)
+            queue.push_back(keep[i].second);
+        return true;
+    }
+
     std::shared_ptr<ChunkEntry> ChunkManager::Get(ChunkPos pos) {
         if (const auto it = chunks.find(pos); it != chunks.end())
             return it->second;
@@ -206,10 +257,16 @@ namespace perlite {
 
     void ChunkManager::Pump() {
         std::vector<std::pair<ChunkPos, std::shared_ptr<ChunkEntry>>> ready;
+        std::vector<ChunkPos> gone;
         {
             std::lock_guard lock(mutex);
             ready.swap(done);
+            gone.swap(dropped);
+            for (const auto& r : ready)
+                pinned.erase(r.first);
         }
+        for (const ChunkPos& pos : gone)
+            requested.erase(pos);
         for (auto& [pos, entry] : ready) {
             requested.erase(pos);
             if (chunks.contains(pos))
@@ -225,6 +282,10 @@ namespace perlite {
     std::shared_ptr<ChunkEntry> ChunkManager::Load(ChunkPos pos) {
         if (const auto it = chunks.find(pos); it != chunks.end())
             return it->second;
+        {
+            std::lock_guard lock(mutex);
+            pinned.insert(pos);
+        }
         if (!backend->ThreadSafe()) {
             const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
             while (std::chrono::steady_clock::now() < until) {
@@ -273,9 +334,29 @@ namespace perlite {
         return entry.payload;
     }
 
+    // Block lookups come in runs inside one chunk (collision, mob movement, random ticks), so the last
+    // column found is remembered per thread.
+    const ChunkColumn* ChunkManager::FindColumn(int chunkX, int chunkZ) const {
+        struct Last {
+            uint64_t owner = 0;
+            uint64_t epoch = 0;
+            ChunkPos pos{};
+            const ChunkColumn* column = nullptr;
+        };
+        thread_local Last last;
+        const uint64_t epoch = eraseEpoch.load(std::memory_order_relaxed);
+        if (last.owner == instanceId && last.epoch == epoch && last.pos.x == chunkX && last.pos.z == chunkZ)
+            return last.column;
+        const auto it = chunks.find({chunkX, chunkZ});
+        if (it == chunks.end())
+            return nullptr;
+        last = {instanceId, epoch, {chunkX, chunkZ}, &it->second->column};
+        return last.column;
+    }
+
     uint16_t ChunkManager::GetBlock(int x, int y, int z) const {
-        const auto it = chunks.find({x >> 4, z >> 4});
-        return it == chunks.end() ? 0 : it->second->column.Get(x & 15, y, z & 15);
+        const ChunkColumn* column = FindColumn(x >> 4, z >> 4);
+        return column ? column->Get(x & 15, y, z & 15) : 0;
     }
 
     bool ChunkManager::SetBlock(int x, int y, int z, uint16_t block) {
@@ -306,6 +387,7 @@ namespace perlite {
                 if (dirty.erase(it->first))
                     store->SaveChunk(dimension, it->first, it->second->column);
                 edited.erase(it->first);
+                eraseEpoch.fetch_add(1, std::memory_order_relaxed);
                 it = chunks.erase(it);
                 dropped++;
                 continue;
@@ -316,7 +398,8 @@ namespace perlite {
                 ++it;
                 continue;
             }
-            it = chunks.erase(it);
+            eraseEpoch.fetch_add(1, std::memory_order_relaxed);
+                it = chunks.erase(it);
             dropped++;
         }
         return dropped;

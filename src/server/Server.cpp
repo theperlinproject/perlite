@@ -357,16 +357,57 @@ namespace perlite {
         return span <= 0.0 ? 20.0 : std::min(20.0, static_cast<double>(tickTimes.size() - 1) / span);
     }
 
+    namespace {
+        // With PERLITE_TICK_PROFILE set, a tick slower than 50 ms is logged with the time of each part.
+        class TickSections {
+        public:
+            TickSections() : last(std::chrono::steady_clock::now()), first(last) {}
+            void Mark(const char* name) {
+                if (!Enabled())
+                    return;
+                const auto now = std::chrono::steady_clock::now();
+                parts.emplace_back(name, std::chrono::duration<double, std::milli>(now - last).count());
+                last = now;
+            }
+            void Report(uint64_t tick) const {
+                if (!Enabled())
+                    return;
+                const double total =
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - first).count();
+                if (total < 50.0)
+                    return;
+                std::string line = "Slow tick " + std::to_string(tick) + " (" + std::to_string(static_cast<int>(total)) +
+                                   " ms):";
+                for (const auto& [name, ms] : parts)
+                    if (ms >= 1.0)
+                        line += std::string(" ") + name + " " + std::to_string(static_cast<int>(ms)) + " ms";
+                LogWarn(line);
+            }
+
+        private:
+            static bool Enabled() {
+                static const bool on = std::getenv("PERLITE_TICK_PROFILE") != nullptr;
+                return on;
+            }
+            std::chrono::steady_clock::time_point last, first;
+            std::vector<std::pair<const char*, double>> parts;
+        };
+    }
+
     void Server::Tick() {
         const auto began = std::chrono::steady_clock::now();
         tickTimes.push_back(began);
         while (tickTimes.size() > 101)
             tickTimes.pop_front();
+        TickSections sections;
+        UpdateChunkViewers();
         chunks->Pump();
+        sections.Mark("chunk pump");
         for (auto& w : otherWorlds)
             if (w)
                 w->Pump();
         Pump();
+        sections.Mark("network");
         DrainLocate();
         const bool advance = !frozen || stepRemaining > 0 || sprintRemaining > 0;
         if (advance) {
@@ -378,6 +419,7 @@ namespace perlite {
             if (frozen && stepRemaining > 0)
                 stepRemaining--;
             TickItems();
+            sections.Mark("items");
             for (const ChunkPos& ready : chunks->TakeReady()) {
                 LoadContainers(kOverworld, ready);
                 mobWorld->OnChunkReady(ready.x, ready.z);
@@ -386,16 +428,21 @@ namespace perlite {
                 if (otherWorlds[d])
                     for (const ChunkPos& ready : otherWorlds[d]->TakeReady())
                         LoadContainers(static_cast<int>(d), ready);
+            sections.Mark("chunks ready");
             mobWorld->Tick();
+            sections.Mark("mobs");
             TickContainers();
             TickPortals();
             TickGravity();
+            sections.Mark("blocks");
             TickRandom();
+            sections.Mark("random ticks");
             plugins->Pump();
             AutosaveTick();
             if (plugins->AnyoneListens(abi::Event::Tick))
                 plugins->Dispatch<abi::Event::Tick>({.dt = 0.05f, .tick = tick});
         }
+        sections.Mark("plugins+autosave");
         std::vector<Session*> players = InGamePlayers();
         onlineCount = static_cast<int>(players.size());
         for (Session* s : players)
@@ -403,13 +450,29 @@ namespace perlite {
                 for (Session* other : players)
                     if (other != s && other->DimensionId() == s->DimensionId())
                         other->SendMove(*s, 0);
-        for (auto& [id, session] : sessions)
-            session->Tick(tick);
+        sections.Mark("movement");
+        // Chunk sending gets a share of the tick; the session that goes first changes every tick so
+        // none is always last when the time runs out.
+        chunkSendDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(15);
+        {
+            std::vector<Session*> order;
+            order.reserve(sessions.size());
+            for (auto& [id, session] : sessions)
+                order.push_back(session.get());
+            if (!order.empty()) {
+                const size_t start = sessionRotation++ % order.size();
+                for (size_t i = 0; i < order.size(); i++)
+                    order[(start + i) % order.size()]->Tick(tick);
+            }
+        }
+        sections.Mark("sessions");
         ReapClosed();
         if (--unloadCountdown <= 0) {
             unloadCountdown = 100;
             UnloadFarChunks();
         }
+        sections.Mark("unload");
+        sections.Report(tick);
         if (advance) {
             tickMillis.push_back(
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count());
@@ -740,6 +803,21 @@ namespace perlite {
         if (!w.Peek({x >> 4, z >> 4}))
             return BlockRegistry::kAir;
         return w.GetBlock(x, y, z);
+    }
+
+    void Server::UpdateChunkViewers() {
+        for (int dim = kOverworld; dim < kDimensionCount; dim++) {
+            ChunkManager* world = dim == kOverworld ? chunks.get() : otherWorlds[static_cast<size_t>(dim)].get();
+            if (!world)
+                continue;
+            std::vector<ChunkManager::Viewer> viewers;
+            for (auto& [id, s] : sessions)
+                if (s->DimensionId() == dim && s->ChunkRadius() > 0)
+                    viewers.push_back({{static_cast<int>(std::floor(s->X())) >> 4,
+                                        static_cast<int>(std::floor(s->Z())) >> 4},
+                                       s->ChunkRadius()});
+            world->SetViewers(std::move(viewers));
+        }
     }
 
     void Server::UnloadFarChunks() {

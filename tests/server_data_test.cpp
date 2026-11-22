@@ -7,6 +7,16 @@
 #include "server/Config.hpp"
 #include "world/actor/mob/VanillaEntities.hpp"
 #include "world/level/block/VoxelShapes.hpp"
+#include "world/level/block/BlockCatalog.hpp"
+#include "world/level/chunk/Chunk.hpp"
+#include "world/level/chunk/ChunkManager.hpp"
+#include "world/level/levelgen/Generator.hpp"
+
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+
+#include <random>
 
 #include <cmath>
 #include <cstdlib>
@@ -128,6 +138,151 @@ static void TestVanillaShapes(const std::string& pack) {
     CHECK(slab);
 }
 
+// The bytes sent for a chunk column must not change when the encoder is reworked: columns with
+// uniform sections, few and many block kinds, and both biome forms, hashed against the value the
+// original encoder produced.
+static constexpr uint64_t kChunkEncodingHash = 0x04780ce9134e444dull;
+
+static uint64_t Fnv(const std::vector<uint8_t>& bytes, uint64_t h = 1469598103934665603ull) {
+    for (const uint8_t b : bytes)
+        h = (h ^ b) * 1099511628211ull;
+    return h;
+}
+
+static void TestChunkEncoding() {
+    BlockCatalog& catalog = BlockCatalog::Instance();
+    catalog.LoadBuiltin();
+    std::vector<uint16_t> kinds;
+    for (const char* n : {"minecraft:stone", "minecraft:dirt", "minecraft:grass_block", "minecraft:water",
+                          "minecraft:oak_log", "minecraft:deepslate", "minecraft:sand", "minecraft:gravel"})
+        kinds.push_back(catalog.DefaultBlock(n));
+    std::vector<uint16_t> many;
+    for (uint16_t id = 1; many.size() < 300; id++)
+        many.push_back(id);
+    std::mt19937 rng(7);
+    uint64_t h = 1469598103934665603ull;
+    for (int variant = 0; variant < 4; variant++) {
+        ChunkColumn col;
+        for (int sec = 0; sec < kSections; sec++) {
+            const int mode = (sec + variant) % 5;
+            if (mode == 0)
+                continue;  // air
+            if (mode == 1) {
+                col.FillSection(sec, kinds[static_cast<size_t>(sec) % kinds.size()]);
+                continue;
+            }
+            for (int i = 0; i < kCells; i++) {
+                const int x = i >> 8, z = (i >> 4) & 15, y = i & 15;
+                uint16_t b;
+                if (mode == 2)
+                    b = kinds[rng() % 2];
+                else if (mode == 3)
+                    b = kinds[rng() % kinds.size()];
+                else
+                    b = many[rng() % many.size()];
+                col.Set(x, kMinY + sec * 16 + y, z, b);
+            }
+        }
+        if (variant % 2 == 0) {
+            for (int x = 0; x < 16; x++)
+                for (int z = 0; z < 16; z++)
+                    col.SetBiome(x, z, static_cast<uint8_t>((x + z) % 4), static_cast<uint8_t>((x * z) % 7));
+        } else {
+            std::vector<uint8_t> table(static_cast<size_t>(16 * ChunkColumn::kQuartLayers)),
+                network(table.size());
+            for (size_t i = 0; i < table.size(); i++) {
+                table[i] = static_cast<uint8_t>(i % 5);
+                network[i] = static_cast<uint8_t>((i / 7) % 9);
+            }
+            col.SetQuartBiomes(table.data(), network.data());
+        }
+        for (int dim : {kOverworld, kNether, kEnd}) {
+            std::vector<uint8_t> out;
+            col.EncodeNetwork(out, dim);
+            h = Fnv(out, h);
+        }
+    }
+    std::printf("server_data_test: chunk encoding hash %016llx\n", static_cast<unsigned long long>(h));
+    const char* expected = std::getenv("PERLITE_EXPECT_CHUNK_HASH");
+    CHECK(h == (expected ? std::strtoull(expected, nullptr, 16) : kChunkEncodingHash));
+}
+
+// The generation queue serves the chunk nearest a player first and drops chunks no player can reach.
+namespace {
+    class RecordingBackend : public TerrainBackend {
+    public:
+        const char* Name() const override { return "recording"; }
+        bool ThreadSafe() const override { return true; }
+        void Generate(std::span<const ChunkPos> positions, std::span<ChunkColumn>) override {
+            std::unique_lock lock(mutex);
+            for (const ChunkPos& p : positions)
+                order.push_back(p);
+            if (!open)
+                gate.wait(lock, [&] { return open; });
+        }
+        void Open() {
+            {
+                std::lock_guard lock(mutex);
+                open = true;
+            }
+            gate.notify_all();
+        }
+        std::mutex mutex;
+        std::condition_variable gate;
+        bool open = false;
+        std::vector<ChunkPos> order;
+    };
+}
+
+static void TestChunkQueueOrder() {
+    auto backend = std::make_unique<RecordingBackend>();
+    RecordingBackend* rec = backend.get();
+    ChunkManager world(std::move(backend), 1);
+    world.Get({1000, 1000});  // taken first and held, so the rest queue up behind it
+    for (int i = 0; i < 200 && [&] { std::lock_guard l(rec->mutex); return rec->order.empty(); }(); i++)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::vector<ChunkPos> asked;
+    for (int x = -6; x <= 6; x++)
+        for (int z = -6; z <= 6; z++)
+            asked.push_back({x, z});
+    asked.push_back({40, 40});
+    asked.push_back({-40, 3});
+    std::mt19937 shuffle(3);
+    std::shuffle(asked.begin(), asked.end(), shuffle);
+    for (const ChunkPos& p : asked)
+        world.Get(p);
+    world.SetViewers({{{0, 0}, 3}});
+    rec->Open();
+    for (int i = 0; i < 400 && world.Pending() > 0; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        world.Pump();
+    }
+    std::vector<ChunkPos> order;
+    {
+        std::lock_guard lock(rec->mutex);
+        order.assign(rec->order.begin() + 1, rec->order.end());
+    }
+    // Only chunks within reach (radius 3 plus a margin of 2) were made, nearest first.
+    int last = -1;
+    bool sorted = true, inReach = true;
+    for (const ChunkPos& p : order) {
+        const int d = p.x * p.x + p.z * p.z;
+        sorted &= d >= last;
+        inReach &= d <= 25;
+        last = d;
+    }
+    CHECK(!order.empty() && sorted && inReach);
+    CHECK(std::ranges::find(order, ChunkPos{40, 40}) == order.end());
+    // A dropped chunk can be asked for again.
+    world.SetViewers({{{40, 40}, 2}});
+    CHECK(world.Get({40, 40}) == nullptr);
+    for (int i = 0; i < 400 && !world.Peek({40, 40}); i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        world.Pump();
+    }
+    CHECK(world.Peek({40, 40}) != nullptr);
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr, "usage: server_data_test <source dir>\n");
@@ -136,6 +291,8 @@ int main(int argc, char** argv) {
     const std::string root = argv[1];
     TestShippedProperties(root);
     TestEntityParser();
+    TestChunkEncoding();
+    TestChunkQueueOrder();
     TestVoxelShapes();
     const char* pack = std::getenv("PERLITE_VANILLA_PACK");
     if (pack && *pack) {

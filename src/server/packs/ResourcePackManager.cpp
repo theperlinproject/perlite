@@ -46,6 +46,9 @@ namespace perlite {
                 out.assign(static_cast<uint8_t*>(buf), static_cast<uint8_t*>(buf) + size);
             else
                 ok = false;
+            // The finished archive belongs to the caller; the writer does not free it.
+            if (buf)
+                mz_free(buf);
             mz_zip_writer_end(&zip);
             return ok;
         }

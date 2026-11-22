@@ -64,6 +64,9 @@ namespace perlite {
         void RunConsoleCommand(const std::string& line);
 
         LoopbackListener& Loopback() { return *loopback; }
+        // Sessions stop sending chunks for the tick once this passes (each still sends at least one),
+        // so a burst of ready chunks is spread over ticks instead of stalling one.
+        std::chrono::steady_clock::time_point ChunkSendDeadline() const { return chunkSendDeadline; }
 
         const ServerConfig& Config() const { return config; }
         const ResourcePackManager& Packs() const { return packs; }
@@ -85,6 +88,9 @@ namespace perlite {
         void RunPlayerCommand(Session& from, const std::string& line);
         std::vector<Session*> InGamePlayers();
         void UnloadFarChunks();
+        void UpdateChunkViewers();
+        std::chrono::steady_clock::time_point chunkSendDeadline{};
+        size_t sessionRotation = 0;
         void BroadcastArmor(const Session& wearer);
         Session* FindSession(uint64_t id);
         Session* FindByName(const std::string& name);

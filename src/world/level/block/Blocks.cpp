@@ -62,6 +62,9 @@ namespace perlite {
 
     BlockRegistry::BlockRegistry() {
         entries.push_back({"minecraft:air", {}, BlockNetworkHash("minecraft:air", {})});
+        hashes = std::make_unique<int32_t[]>(0x10000);
+        hashes[0] = entries[0].hash;
+        hashCount.store(1, std::memory_order_release);
         byKey["minecraft:air"] = 0;
     }
 
@@ -81,6 +84,8 @@ namespace perlite {
             return kAir;
         const uint16_t id = static_cast<uint16_t>(entries.size());
         entries.push_back({name, states, BlockNetworkHash(name, states)});
+        hashes[id] = entries.back().hash;
+        hashCount.store(static_cast<uint32_t>(id) + 1, std::memory_order_release);
         byKey.emplace(key, id);
         return id;
     }
@@ -92,8 +97,7 @@ namespace perlite {
     }
 
     int32_t BlockRegistry::Hash(uint16_t id) const {
-        std::lock_guard lock(mutex);
-        return id < entries.size() ? entries[id].hash : entries[0].hash;
+        return id < hashCount.load(std::memory_order_acquire) ? hashes[id] : hashes[0];
     }
 
     std::string BlockRegistry::Name(uint16_t id) const {

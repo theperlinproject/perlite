@@ -477,6 +477,7 @@ namespace perlite {
                         cpu->BiomesOf(density, positions[i].x, positions[i].z, biomes.data());
                     }
                     vanilla::DfCacheScope cache(true);
+                    vanilla::DfChunkGrid grid(positions[i].x * 16, positions[i].z * 16, kMinY, kHeight);
                     if (wantClimate)
                         cpu->PrimeChunkFill(positions[i].x, positions[i].z,
                                             b.climate.data() + i * 16 * static_cast<size_t>(quartLayers) * 6);

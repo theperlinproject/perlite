@@ -17,6 +17,7 @@ namespace perlite::vanilla {
             Biome,
             Noise,
             Gradient,
+            BedrockFloor,
             YAbove,
             Water,
             Temperature,
@@ -136,6 +137,12 @@ namespace perlite::vanilla {
             c.random = graph->Positional().FromHashOf(v["random_name"].String()).ForkPositional();
             c.a = Anchor(v["true_at_and_below"], genMinY, genMaxY);
             c.b = Anchor(v["false_at_and_above"], genMinY, genMaxY);
+            // The Bedrock Edition floor is not a per-block gradient: each column is solid bedrock from
+            // the bottom up, 2 to 5 blocks thick with each thickness equally likely (measured on worlds
+            // saved by the game). The thickness is drawn once per column. Only the overworld floor has
+            // been measured, so the nether keeps the gradient.
+            if (v["random_name"].String() == "minecraft:bedrock_floor" && genMinY == kMinY)
+                c.kind = K::BedrockFloor;
         } else if (type == "y_above") {
             c.kind = K::YAbove;
             c.a = Anchor(v["anchor"], genMinY, genMaxY);
@@ -343,6 +350,10 @@ namespace perlite::vanilla {
             case K::Noise: {
                 const double v = static_cast<double>(c.is3d ? c.noise->Get(x, y, z) : c.noise->Get(x, 0.0, z));
                 return v >= c.lo && v <= c.hi;
+            }
+            case K::BedrockFloor: {
+                WorldRandom r = c.random.At(x, c.a, z);
+                return y - c.a < 2 + r.NextInt(4);
             }
             case K::Gradient: {
                 if (y <= c.a)

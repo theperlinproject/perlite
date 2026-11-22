@@ -24,6 +24,7 @@
 #include <set>
 
 namespace perlite {
+    struct ChunkEntry;
 
     class Server;
 
@@ -278,6 +279,7 @@ namespace perlite {
         void SendCommands();
         void SendWorldSetup();
         void StreamChunks();
+        void SendChunk(ChunkEntry& entry, ChunkPos pos);
         void PublishCenter(bool force);
         void SetPosition(double x, double y, double z, float pitchValue, float yawValue);
 

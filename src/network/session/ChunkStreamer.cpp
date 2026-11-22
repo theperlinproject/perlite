@@ -1,5 +1,7 @@
 #include "network/session/SessionInternal.hpp"
 
+#include <chrono>
+
 namespace perlite {
     void Session::OnChunkRadius(std::span<const uint8_t> body) {
         proto::RequestChunkRadiusPacket req;
@@ -58,6 +60,52 @@ namespace perlite {
         return dx * dx + dz * dz <= radius * radius;
     }
 
+    // A chunk is the same packet for every player, so it is encoded and compressed once per change
+    // of the chunk and sent as its own batch (after anything already queued, to keep the order).
+    void Session::SendChunk(ChunkEntry& entry, ChunkPos pos) {
+        const std::vector<uint8_t>& payload = server.World(dimension).Payload(entry);
+        const auto build = [&] {
+            proto::LevelChunkPacket lc;
+            lc.x = pos.x;
+            lc.z = pos.z;
+            lc.dimension = dimension;
+            lc.subChunkCount = static_cast<uint32_t>(RangeOf(dimension).SectionCount());
+            lc.cacheEnabled = false;
+            lc.payload = payload;
+            return lc;
+        };
+        const ServerConfig& cfg = server.Config();
+        if (cfg.debugLogPackets || !cfg.debugSkipPackets.empty()) {
+            Send(build());
+            return;
+        }
+        const uint32_t settings = codec.SettingsKey();
+        if (entry.sealedVersion != entry.payloadVersion || entry.sealedSettings != settings) {
+            std::vector<uint8_t> body;
+            if (!net::EncodeChecked(build(), body)) {
+                LogWarn("refusing to send malformed level_chunk");
+                return;
+            }
+            std::vector<uint8_t> content;
+            BatchCodec::AppendPacket(content, proto::LevelChunkPacket::kId, body);
+            entry.sealed = codec.Seal(content);
+            entry.sealedVersion = entry.payloadVersion;
+            entry.sealedSettings = settings;
+        }
+        Flush();
+        if (state == State::Closed)
+            return;
+        bool ok;
+        if (cipher.Active()) {
+            const std::vector<uint8_t> wire = cipher.Encrypt(entry.sealed);
+            ok = connection->Send(wire.data(), wire.size(), true);
+        } else {
+            ok = connection->Send(entry.sealed.data(), entry.sealed.size(), true);
+        }
+        if (!ok)
+            Close();
+    }
+
     void Session::StreamChunks() {
         if (radius == 0 || !centerSent)
             return;
@@ -76,7 +124,7 @@ namespace perlite {
         int budget = connection->Local() ? kChunksPerTick * 8
                      : state == State::Loading ? kChunksPerTick * 3
                                                : kChunksPerTick * 2;
-        int asked = 0;
+        int asked = 0, sentNow = 0;
         for (const ChunkPos& pos : want) {
             auto entry = server.World(dimension).Get(pos);
             if (!entry) {
@@ -86,17 +134,12 @@ namespace perlite {
             }
             if (budget <= 0)
                 break;
-            const std::vector<uint8_t>& payload = server.World(dimension).Payload(*entry);
-            proto::LevelChunkPacket lc;
-            lc.x = pos.x;
-            lc.z = pos.z;
-            lc.dimension = dimension;
-            lc.subChunkCount = static_cast<uint32_t>(RangeOf(dimension).SectionCount());
-            lc.cacheEnabled = false;
-            lc.payload = payload;
-            Send(lc);
+            if (sentNow > 0 && std::chrono::steady_clock::now() > server.ChunkSendDeadline())
+                break;
+            SendChunk(*entry, pos);
             sent.insert(pos);
             budget--;
+            sentNow++;
         }
         if (!spawnSent && state == State::Loading) {
             size_t near = 0;

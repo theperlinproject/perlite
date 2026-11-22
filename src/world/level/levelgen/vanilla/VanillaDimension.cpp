@@ -202,11 +202,14 @@ namespace perlite::vanilla {
         for (size_t n = 0; n < positions.size() && n < out.size(); n++) {
             DfCacheScope cache(true);
             const int cx = positions[n].x, cz = positions[n].z;
-            for (int x = 0; x < 16; x++)
-                for (int z = 0; z < 16; z++)
-                    for (int y = 0; y < genHeight; y++)
-                        density[static_cast<size_t>((x * 16 + z) * genHeight + y)] =
-                            finalDensity->Eval(cx * 16 + x, genMinY + y, cz * 16 + z);
+            DfChunkGrid grid(cx * 16, cz * 16, genMinY, genHeight);
+            {
+                for (int x = 0; x < 16; x++)
+                    for (int z = 0; z < 16; z++)
+                        for (int y = 0; y < genHeight; y++)
+                            density[static_cast<size_t>((x * 16 + z) * genHeight + y)] =
+                                finalDensity->Eval(cx * 16 + x, genMinY + y, cz * 16 + z);
+            }
             Build(cx, cz, density.data(), out[n]);
         }
     }

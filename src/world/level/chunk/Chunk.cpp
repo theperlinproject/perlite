@@ -20,6 +20,51 @@ namespace perlite {
             PutVarint(o, (static_cast<uint32_t>(v) << 1) ^ static_cast<uint32_t>(v >> 31));
         }
 
+        unsigned BitsFor(size_t paletteSize) {
+            unsigned need = 0;
+            while ((1u << need) < paletteSize)
+                need++;
+            return need == 0   ? 0
+                   : need <= 1 ? 1
+                   : need <= 2 ? 2
+                   : need <= 3 ? 3
+                   : need <= 4 ? 4
+                   : need <= 5 ? 5
+                   : need <= 6 ? 6
+                   : need <= 8 ? 8
+                               : 16;
+        }
+
+        // One paletted storage: header, the packed indices (little-endian words), then the palette.
+        void WritePalette(std::vector<uint8_t>& out, const int32_t* palette, size_t paletteSize, const uint16_t* idx) {
+            const unsigned bits = BitsFor(paletteSize);
+            out.push_back(static_cast<uint8_t>((bits << 1) | 1));
+            if (bits == 0) {
+                PutZigzag(out, palette[0]);
+                return;
+            }
+            const unsigned perWord = 32 / bits;
+            const unsigned words = (kCells + perWord - 1) / perWord;
+            const size_t at = out.size();
+            out.resize(at + static_cast<size_t>(words) * 4);
+            uint8_t* dst = out.data() + at;
+            unsigned i = 0;
+            for (unsigned w = 0; w < words; w++) {
+                uint32_t word = 0;
+                for (unsigned k = 0; k < perWord && i < static_cast<unsigned>(kCells); k++, i++)
+                    word |= static_cast<uint32_t>(idx[i]) << (k * bits);
+                dst[0] = static_cast<uint8_t>(word);
+                dst[1] = static_cast<uint8_t>(word >> 8);
+                dst[2] = static_cast<uint8_t>(word >> 16);
+                dst[3] = static_cast<uint8_t>(word >> 24);
+                dst += 4;
+            }
+            PutZigzag(out, static_cast<int32_t>(paletteSize));
+            for (size_t k = 0; k < paletteSize; k++)
+                PutZigzag(out, palette[k]);
+        }
+
+        // A storage of arbitrary values; the palette is in order of first appearance.
         void WriteStorage(std::vector<uint8_t>& out, const std::array<int32_t, kCells>& values) {
             static thread_local std::vector<int32_t> palette;
             static thread_local std::unordered_map<int32_t, uint32_t> lookup;
@@ -57,34 +102,47 @@ namespace perlite {
                 }
                 idx[static_cast<size_t>(i)] = static_cast<uint16_t>(lastIndex);
             }
-            unsigned need = 0;
-            while ((1u << need) < palette.size())
-                need++;
-            const unsigned bits = need == 0   ? 0
-                                  : need <= 1 ? 1
-                                  : need <= 2 ? 2
-                                  : need <= 3 ? 3
-                                  : need <= 4 ? 4
-                                  : need <= 5 ? 5
-                                  : need <= 6 ? 6
-                                  : need <= 8 ? 8
-                                              : 16;
-            out.push_back(static_cast<uint8_t>((bits << 1) | 1));
-            if (bits == 0) {
-                PutZigzag(out, palette[0]);
+            WritePalette(out, palette.data(), palette.size(), idx.data());
+        }
+
+        // A section of block ids. The palette is built on the ids, and only its entries are turned into
+        // network hashes; the bytes are the same as writing the hashes of every cell.
+        void WriteBlocks(std::vector<uint8_t>& out, const std::array<uint16_t, kCells>& cells,
+                         const BlockRegistry& blocks) {
+            static thread_local std::vector<int32_t> slotOf(0x10000, -1);
+            static thread_local std::vector<uint16_t> ids;
+            static thread_local std::vector<int32_t> palette;
+            ids.clear();
+            std::array<uint16_t, kCells> idx;
+            for (int i = 0; i < kCells; i++) {
+                const uint16_t id = cells[static_cast<size_t>(i)];
+                int32_t& slot = slotOf[id];
+                if (slot < 0) {
+                    slot = static_cast<int32_t>(ids.size());
+                    ids.push_back(id);
+                }
+                idx[static_cast<size_t>(i)] = static_cast<uint16_t>(slot);
+            }
+            palette.resize(ids.size());
+            bool distinct = true;
+            for (size_t k = 0; k < ids.size(); k++) {
+                palette[k] = blocks.Hash(ids[k]);
+                slotOf[ids[k]] = -1;
+            }
+            if (palette.size() > 1) {
+                std::vector<int32_t> sorted = palette;
+                std::ranges::sort(sorted);
+                distinct = std::ranges::adjacent_find(sorted) == sorted.end();
+            }
+            if (distinct) {
+                WritePalette(out, palette.data(), palette.size(), idx.data());
                 return;
             }
-            const unsigned perWord = 32 / bits;
-            const unsigned words = (kCells + perWord - 1) / perWord;
-            std::vector<uint32_t> packed(words, 0);
-            for (unsigned i = 0; i < static_cast<unsigned>(kCells); i++)
-                packed[i / perWord] |= static_cast<uint32_t>(idx[i]) << ((i % perWord) * bits);
-            for (const uint32_t w : packed)
-                for (int b = 0; b < 4; b++)
-                    out.push_back(static_cast<uint8_t>((w >> (8 * b)) & 0xFF));
-            PutZigzag(out, static_cast<int32_t>(palette.size()));
-            for (const int32_t v : palette)
-                PutZigzag(out, v);
+            // Two ids with one network hash share a palette entry.
+            std::array<int32_t, kCells> values;
+            for (int i = 0; i < kCells; i++)
+                values[static_cast<size_t>(i)] = blocks.Hash(cells[static_cast<size_t>(i)]);
+            WriteStorage(out, values);
         }
     }
 
@@ -147,18 +205,18 @@ namespace perlite {
         const DimensionRange range = RangeOf(dimension);
         const int first = range.FirstSection(), count = range.SectionCount();
         std::array<int32_t, kCells> values;
+        out.reserve(out.size() + static_cast<size_t>(count) * 2200 + 2048);
         for (int sec = first; sec < first + count; sec++) {
             const Section& s = sections[static_cast<size_t>(sec)];
             out.push_back(9);
             out.push_back(1);
             out.push_back(static_cast<uint8_t>(static_cast<int8_t>((kMinY >> 4) + sec)));
             if (s.cells) {
-                for (int i = 0; i < kCells; i++)
-                    values[static_cast<size_t>(i)] = blocks.Hash((*s.cells)[static_cast<size_t>(i)]);
+                WriteBlocks(out, *s.cells, blocks);
             } else {
-                values.fill(blocks.Hash(s.uniform));
+                out.push_back(1);  // no bits per cell: the one palette entry follows
+                PutZigzag(out, blocks.Hash(s.uniform));
             }
-            WriteStorage(out, values);
         }
         if (!hasQuartBiomes) {
             for (int x = 0; x < 16; x++)

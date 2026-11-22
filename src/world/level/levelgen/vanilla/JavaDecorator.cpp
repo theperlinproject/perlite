@@ -2217,7 +2217,11 @@ namespace perlite::vanilla {
                 Rng rng;
                 rng.SetSeed(d.seed);
                 const int64_t a = rng.NextLong() | 1, b = rng.NextLong() | 1;
-                const int64_t decoration = (static_cast<int64_t>(originX) * a + static_cast<int64_t>(originZ) * b) ^ d.seed;
+                // Java's long arithmetic wraps; done unsigned here to get the same bits without overflow.
+                const int64_t decoration = static_cast<int64_t>(
+                    (static_cast<uint64_t>(static_cast<int64_t>(originX)) * static_cast<uint64_t>(a) +
+                     static_cast<uint64_t>(static_cast<int64_t>(originZ)) * static_cast<uint64_t>(b)) ^
+                    static_cast<uint64_t>(d.seed));
                 Engine engine(d, world, rng);
                 for (int step = 0; step < 11; step++) {
                     const auto& list = d.doc["order"][static_cast<size_t>(step)].items;

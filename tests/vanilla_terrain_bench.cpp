@@ -1,3 +1,4 @@
+#include "network/Batch.hpp"
 #include "server/Config.hpp"
 #include "world/level/block/BlockCatalog.hpp"
 #include "world/level/levelgen/vanilla/VanillaTerrain.hpp"
@@ -50,8 +51,14 @@ int main(int argc, char** argv) {
             }
         decorateMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - d0).count();
     }
-    std::printf("decorated %d chunks in %.0f ms (%.1f ms each)\n", decorated, decorateMs,
-                decorated ? decorateMs / decorated : 0.0);
+    uint64_t decoratedHash = 1469598103934665603ull;
+    for (const ChunkColumn& col : decoratedCols)
+        for (int x = 0; x < 16; x++)
+            for (int z = 0; z < 16; z++)
+                for (int y = -64; y < 320; y++)
+                    decoratedHash = (decoratedHash ^ col.Get(x, y, z)) * 1099511628211ull;
+    std::printf("decorated %d chunks in %.0f ms (%.1f ms each) hash %016llx\n", decorated, decorateMs,
+                decorated ? decorateMs / decorated : 0.0, static_cast<unsigned long long>(decoratedHash));
     const BlockCatalog& c = BlockCatalog::Instance();
     const uint16_t water = c.DefaultBlock("water"), lava = c.DefaultBlock("lava");
     long air = 0, wet = 0, hot = 0;
@@ -72,6 +79,45 @@ int main(int argc, char** argv) {
                 }
     std::printf("%zu chunks in %.0f ms (%.1f ms each); y -50..29: air %ld water %ld lava %ld hash %016llx\n", pos.size(), ms,
                 ms / static_cast<double>(pos.size()), air, wet, hot, static_cast<unsigned long long>(hash));
+    {
+        // Network encoding of the generated columns, as sent to players.
+        std::vector<uint8_t> payload;
+        uint64_t encodedHash = 1469598103934665603ull;
+        const auto e0 = std::chrono::steady_clock::now();
+        for (int rep = 0; rep < 5; rep++)
+            for (const ChunkColumn& col : decoratedCols.empty() ? cols : decoratedCols) {
+                payload.clear();
+                col.EncodeNetwork(payload);
+                if (rep == 0)
+                    for (const uint8_t b : payload)
+                        encodedHash = (encodedHash ^ b) * 1099511628211ull;
+            }
+        const double encodeMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - e0).count();
+        const size_t n = (decoratedCols.empty() ? cols : decoratedCols).size() * 5;
+        std::printf("encoded %zu chunks in %.0f ms (%.3f ms each) hash %016llx\n", n, encodeMs,
+                    encodeMs / static_cast<double>(n), static_cast<unsigned long long>(encodedHash));
+        // Batch compression of those payloads, a few chunks per batch as a session sends them.
+        BatchCodec codec;
+        codec.EnableCompression(256);
+        std::vector<uint8_t> batch;
+        size_t raw = 0, packed = 0;
+        const auto c0 = std::chrono::steady_clock::now();
+        int inBatch = 0;
+        for (const ChunkColumn& col : decoratedCols.empty() ? cols : decoratedCols) {
+            payload.clear();
+            col.EncodeNetwork(payload);
+            BatchCodec::AppendPacket(batch, 58, payload);
+            if (++inBatch == 6) {
+                raw += batch.size();
+                packed += codec.Seal(batch).size();
+                batch.clear();
+                inBatch = 0;
+            }
+        }
+        const double cms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - c0).count();
+        std::printf("compressed %.2f MB to %.2f MB in %.0f ms (%.1f MB/s)\n", static_cast<double>(raw) / 1e6,
+                    static_cast<double>(packed) / 1e6, cms, static_cast<double>(raw) / 1e3 / cms);
+    }
     std::map<std::string, int> tops, all;
     for (const ChunkColumn& col : decoratedCols.empty() ? cols : decoratedCols)
         for (int x = 0; x < 16; x++)

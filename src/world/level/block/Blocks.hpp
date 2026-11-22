@@ -1,5 +1,7 @@
 #pragma once
 #include <cstdint>
+#include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -37,5 +39,9 @@ namespace perlite {
         };
         std::vector<Entry> entries;
         std::unordered_map<std::string, uint16_t> byKey;
+        // Network hashes by id, readable without the lock: an id's hash is written before the count
+        // that makes it visible, and the table never moves.
+        std::unique_ptr<int32_t[]> hashes;
+        std::atomic<uint32_t> hashCount{0};
     };
 }

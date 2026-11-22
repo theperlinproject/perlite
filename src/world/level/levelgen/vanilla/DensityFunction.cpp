@@ -59,6 +59,7 @@ namespace perlite::vanilla {
             }
         };
         thread_local CornerMap* t_corners = nullptr;
+        thread_local DfChunkGrid* t_grid = nullptr;
 
         struct FlatSlot {
             const DfNode* node = nullptr;
@@ -90,6 +91,12 @@ namespace perlite::vanilla {
 
         float Lerp(float t, float a, float b) {
             return a + t * (b - a);
+        }
+        // The corner order is v000, v100, v010, v110, v001, v101, v011, v111.
+        float Trilinear(const float* c, float tx, float ty, float tz) {
+            const float a = Lerp(ty, Lerp(tx, c[0], c[1]), Lerp(tx, c[2], c[3]));
+            const float b = Lerp(ty, Lerp(tx, c[4], c[5]), Lerp(tx, c[6], c[7]));
+            return Lerp(tz, a, b);
         }
         float Clamp(float v, float lo, float hi) {
             return v < lo ? lo : std::min(v, hi);
@@ -161,6 +168,85 @@ namespace perlite::vanilla {
             t_scratch.Release();
         t_corners = nullptr;
         t_memo = nullptr;
+    }
+
+    struct DfChunkGrid::Layer {
+        const DfNode* node = nullptr;
+        int nx = 0, ny = 0;  // corners along x/z and y
+        int cellXz = 4, cellY = 8;
+        bool usable = false;
+        std::vector<float> corners;  // [x][z][y]
+
+        float At(int ix, int iy, int iz) const {
+            return corners[static_cast<size_t>((ix * nx + iz) * ny + iy)];
+        }
+        float Sample(const DfChunkGrid& g, int x, int y, int z) const {
+            const int lx = x - g.bx, ly = y - g.minY, lz = z - g.bz;
+            const int fx = lx % cellXz, fy = ly % cellY, fz = lz % cellXz;
+            const int ix = lx / cellXz, iy = ly / cellY, iz = lz / cellXz;
+            if (fx == 0 && fy == 0 && fz == 0)
+                return At(ix, iy, iz);
+            const float tx = static_cast<float>(fx) / static_cast<float>(cellXz),
+                        ty = static_cast<float>(fy) / static_cast<float>(cellY),
+                        tz = static_cast<float>(fz) / static_cast<float>(cellXz);
+            const float c[8] = {At(ix, iy, iz),         At(ix + 1, iy, iz),         At(ix, iy + 1, iz),
+                                At(ix + 1, iy + 1, iz), At(ix, iy, iz + 1),         At(ix + 1, iy, iz + 1),
+                                At(ix, iy + 1, iz + 1), At(ix + 1, iy + 1, iz + 1)};
+            return Trilinear(c, tx, ty, tz);
+        }
+    };
+
+    DfChunkGrid::DfChunkGrid(int blockX, int blockZ, int minY_, int height_)
+        : bx(blockX), bz(blockZ), minY(minY_), height(height_), previous(t_grid) {
+        t_grid = this;
+    }
+    DfChunkGrid::~DfChunkGrid() {
+        t_grid = previous;
+    }
+
+    const DfChunkGrid::Layer* DfChunkGrid::For(const DfNode* node) {
+        for (const auto& l : layers)
+            if (l->node == node)
+                return l->usable ? l.get() : nullptr;
+        auto layer = std::make_unique<Layer>();
+        layer->node = node;
+        layer->cellXz = node->cellXz;
+        layer->cellY = node->cellY;
+        const auto aligned = [](int v, int step) { return step > 0 && v % step == 0; };
+        layer->usable = aligned(16, node->cellXz) && aligned(bx, node->cellXz) && aligned(bz, node->cellXz) &&
+                        aligned(height, node->cellY) && aligned(minY, node->cellY);
+        if (layer->usable) {
+            layer->nx = 16 / node->cellXz + 1;
+            layer->ny = height / node->cellY + 1;
+            layer->corners.resize(static_cast<size_t>(layer->nx * layer->nx * layer->ny));
+            // The grid is filled with this scope cleared, so the corners are computed exactly as the
+            // per-block path computes them.
+            DfChunkGrid* self = t_grid;
+            t_grid = nullptr;
+            for (int ix = 0; ix < layer->nx; ix++)
+                for (int iz = 0; iz < layer->nx; iz++)
+                    for (int iy = 0; iy < layer->ny; iy++)
+                        layer->corners[static_cast<size_t>((ix * layer->nx + iz) * layer->ny + iy)] =
+                            node->CornerValue(bx + ix * node->cellXz, minY + iy * node->cellY,
+                                              bz + iz * node->cellXz);
+            t_grid = self;
+        }
+        layers.push_back(std::move(layer));
+        return layers.back()->usable ? layers.back().get() : nullptr;
+    }
+
+    float DfNode::CornerValue(int cx, int cy, int cz) const {
+        if (!t_corners)
+            return in[0]->Eval(cx, cy, cz);
+        bool found = false;
+        CornerMap::Entry* e = t_corners->Find(this, cx, cy, cz, found);
+        if (found)
+            return e->value;
+        const float v = in[0]->Eval(cx, cy, cz);
+        e = t_corners->Find(this, cx, cy, cz, found);
+        *e = {this, cx, cy, cz, v};
+        t_corners->used++;
+        return v;
     }
 
     float SplineNode::Eval(int x, int y, int z) const {
@@ -318,7 +404,9 @@ namespace perlite::vanilla {
         case O::Pass:
             return in[0]->Eval(x, y, z);
         case O::Interpolated: {
-
+            if (t_grid && t_grid->Covers(x, y, z))
+                if (const DfChunkGrid::Layer* layer = t_grid->For(this))
+                    return layer->Sample(*t_grid, x, y, z);
             const auto mod = [](int a, int b) {
                 const int r = a % b;
                 return r < 0 ? r + b : r;
@@ -330,32 +418,19 @@ namespace perlite::vanilla {
             const float tx = static_cast<float>(fx) / static_cast<float>(cellXz),
                         ty = static_cast<float>(fy) / static_cast<float>(cellY),
                         tz = static_cast<float>(fz) / static_cast<float>(cellXz);
-            const auto corner = [&](int cx, int cy, int cz) {
-                if (!t_corners)
-                    return in[0]->Eval(cx, cy, cz);
-                bool found = false;
-                CornerMap::Entry* e = t_corners->Find(this, cx, cy, cz, found);
-                if (found)
-                    return e->value;
-                const float v = in[0]->Eval(cx, cy, cz);
-                e = t_corners->Find(this, cx, cy, cz, found);
-                *e = {this, cx, cy, cz, v};
-                t_corners->used++;
-                return v;
-            };
             float c[8];
             CellSlot* cell = t_memo ? &t_memo->cells[PtrHash(this) & (kCellSlots - 1)] : nullptr;
             if (cell && cell->node == this && cell->x == x0 && cell->y == y0 && cell->z == z0) {
                 std::copy_n(cell->v, 8, c);
             } else {
-                c[0] = corner(x0, y0, z0);
-                c[1] = corner(x0 + cellXz, y0, z0);
-                c[2] = corner(x0, y0 + cellY, z0);
-                c[3] = corner(x0 + cellXz, y0 + cellY, z0);
-                c[4] = corner(x0, y0, z0 + cellXz);
-                c[5] = corner(x0 + cellXz, y0, z0 + cellXz);
-                c[6] = corner(x0, y0 + cellY, z0 + cellXz);
-                c[7] = corner(x0 + cellXz, y0 + cellY, z0 + cellXz);
+                c[0] = CornerValue(x0, y0, z0);
+                c[1] = CornerValue(x0 + cellXz, y0, z0);
+                c[2] = CornerValue(x0, y0 + cellY, z0);
+                c[3] = CornerValue(x0 + cellXz, y0 + cellY, z0);
+                c[4] = CornerValue(x0, y0, z0 + cellXz);
+                c[5] = CornerValue(x0 + cellXz, y0, z0 + cellXz);
+                c[6] = CornerValue(x0, y0 + cellY, z0 + cellXz);
+                c[7] = CornerValue(x0 + cellXz, y0 + cellY, z0 + cellXz);
                 if (cell) {
                     cell->node = this;
                     cell->x = x0;
@@ -364,11 +439,7 @@ namespace perlite::vanilla {
                     std::copy_n(c, 8, cell->v);
                 }
             }
-            const float v000 = c[0], v100 = c[1], v010 = c[2], v110 = c[3], v001 = c[4], v101 = c[5],
-                        v011 = c[6], v111 = c[7];
-            const float a = Lerp(ty, Lerp(tx, v000, v100), Lerp(tx, v010, v110));
-            const float b = Lerp(ty, Lerp(tx, v001, v101), Lerp(tx, v011, v111));
-            return Lerp(tz, a, b);
+            return Trilinear(c, tx, ty, tz);
         }
         case O::OldBlendedNoise:
             return blended->Get(x, y, z);

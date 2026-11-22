@@ -23,6 +23,30 @@ namespace perlite::vanilla {
         bool kept = false;
     };
 
+    // While one is alive on a thread, the interpolated nodes inside one chunk column read their cell
+    // corners from a grid filled once per node for the whole column, instead of looking each cell up
+    // per block. Values are the same as without it: the corners come from the same evaluation and
+    // the interpolation is done in the same order.
+    class DfChunkGrid {
+    public:
+        DfChunkGrid(int blockX, int blockZ, int minY, int height);
+        ~DfChunkGrid();
+        DfChunkGrid(const DfChunkGrid&) = delete;
+        DfChunkGrid& operator=(const DfChunkGrid&) = delete;
+
+        struct Layer;
+        // The node's corner grid, filled on first use; null when the node's cells do not tile the column.
+        const Layer* For(const struct DfNode* node);
+        bool Covers(int x, int y, int z) const {
+            return x >= bx && x < bx + 16 && z >= bz && z < bz + 16 && y >= minY && y < minY + height;
+        }
+        int bx, bz, minY, height;
+
+    private:
+        DfChunkGrid* previous = nullptr;
+        std::vector<std::unique_ptr<Layer>> layers;
+    };
+
     uint64_t NextBackendInstance();
 
     struct DfNode;
@@ -95,6 +119,8 @@ namespace perlite::vanilla {
 
         float Eval(int x, int y, int z) const;
         float EvalUncached(int x, int y, int z) const;
+        // An interpolated node's input at a cell corner, shared through the per-thread corner cache.
+        float CornerValue(int x, int y, int z) const;
     };
 
     class DensityGraph {

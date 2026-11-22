@@ -14,6 +14,8 @@ namespace perlite {
             this->threshold = threshold;
         }
         bool Compressing() const { return compression; }
+        // Two codecs with the same key seal the same content to the same bytes.
+        uint32_t SettingsKey() const { return compression ? threshold : 0x10000u; }
 
         static void AppendPacket(std::vector<uint8_t>& content, uint32_t id, std::span<const uint8_t> body);
         std::vector<uint8_t> Seal(const std::vector<uint8_t>& content) const;

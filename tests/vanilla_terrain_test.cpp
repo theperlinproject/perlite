@@ -44,6 +44,28 @@ int main() {
             }
         std::printf("chunk (%d,%d): top block at (8,8) y=%d\n", pos[n].x, pos[n].z, height);
     }
+    // The overworld bedrock floor, as the game makes it: solid at the two lowest layers, then each column
+    // 2 to 5 blocks thick from the bottom, with no gaps.
+    {
+        const uint16_t bedrock = BlockCatalog::Instance().DefaultBlock("minecraft:bedrock");
+        int seen[8] = {};
+        bool holes = false;
+        for (const ChunkColumn& col : cols)
+            for (int x = 0; x < 16; x++)
+                for (int z = 0; z < 16; z++) {
+                    int t = 0;
+                    while (t < 8 && col.Get(x, -64 + t, z) == bedrock)
+                        t++;
+                    seen[t]++;
+                    for (int y = -64 + t; y < -56; y++)
+                        holes |= col.Get(x, y, z) == bedrock;
+                }
+        if (seen[0] || seen[1] || seen[6] || seen[7] || !seen[2] || !seen[3] || !seen[4] || !seen[5] || holes) {
+            std::printf("bedrock floor: thickness counts 0..7 = %d %d %d %d %d %d %d %d, gaps %d\n", seen[0], seen[1],
+                        seen[2], seen[3], seen[4], seen[5], seen[6], seen[7], holes ? 1 : 0);
+            return 1;
+        }
+    }
     if (bad > 40) {
         std::printf("%d solid positions came out as air\n", bad);
         return 1;

@@ -159,11 +159,16 @@ namespace perlite::vanilla {
         for (size_t n = 0; n < positions.size() && n < out.size(); n++) {
             DfCacheScope cache(true);
             const int bx = positions[n].x * 16, bz = positions[n].z * 16;
-            for (int x = 0; x < 16; x++)
-                for (int z = 0; z < 16; z++)
-                    for (int y = 0; y < kHeight; y++)
-                        density[static_cast<size_t>((x * 16 + z) * kHeight + y)] =
-                            finalDensity->Eval(bx + x, kMinY + y, bz + z);
+            // The grid serves the interpolated functions of this column: the density here, and the
+            // ore veins and aquifers the surface pass reads below.
+            DfChunkGrid grid(bx, bz, kMinY, kHeight);
+            {
+                for (int x = 0; x < 16; x++)
+                    for (int z = 0; z < 16; z++)
+                        for (int y = 0; y < kHeight; y++)
+                            density[static_cast<size_t>((x * 16 + z) * kHeight + y)] =
+                                finalDensity->Eval(bx + x, kMinY + y, bz + z);
+            }
             std::array<uint8_t, 256> biomes;
             BiomesOf(density.data(), positions[n].x, positions[n].z, biomes.data());
             surface->Fill(density.data(), biomes.data(), out[n], Decorates() ? nullptr : features.get(), positions[n].x,
