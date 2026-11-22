@@ -236,12 +236,8 @@ namespace perlite {
             const float strength = knockback * std::max(0.0f, 1.0f - resist);
             const double dx = posX - fromX, dz = posZ - fromZ;
             const double len = std::max(0.01, std::sqrt(dx * dx + dz * dz));
-            proto::SetEntityMotionPacket kb;
-            kb.runtimeEntityId = runtimeId;
-            kb.velocity = {static_cast<float>(dx / len * strength), std::min(0.4f, 0.36f * strength / 0.4f + 0.04f),
-                           static_cast<float>(dz / len * strength)};
-            kb.tick = server.TickCount();
-            Send(kb);
+            SetVelocity(dx / len * strength, std::min(0.4f, 0.36f * strength / 0.4f + 0.04f),
+                        dz / len * strength);
         }
         if (health <= 0)
             Die(cause, attacker ? attacker->Name() : source);

@@ -361,6 +361,7 @@ namespace perlite {
         double lastHookX = 0, lastHookY = 0, lastHookZ = 0;
 
         double posX = 0.5, posY = 0, posZ = 0.5;
+        uint64_t inputTick = 0;
         int dimension = kOverworld;
         bool awaitingDimensionAck = false;
         std::chrono::steady_clock::time_point dimensionChangedAt;

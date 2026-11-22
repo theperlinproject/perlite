@@ -762,6 +762,23 @@ int main(int argc, char** argv) {
                         a->Inventory().armor[1] = ItemStack{};
                     }
                     alice.Settle(25);
+                    {
+                        proto::PlayerAuthInputPacket still;
+                        still.position = {static_cast<float>(a->X()), static_cast<float>(a->Y()),
+                                          static_cast<float>(a->Z())};
+                        still.tick = server.TickCount() + 7000;
+                        alice.Send(still);
+                        alice.Settle();
+                        alice.inbox.clear();
+                        CHECK(a->Damage(1.0f, Session::DamageCause::Mob, a->X() + 1, a->Z()));
+                        alice.Settle(1);
+                        bool pushed = false;
+                        for (const auto& m : alice.Take<proto::SetEntityMotionPacket>())
+                            if (m.runtimeEntityId == a->Id())
+                                pushed = m.tick == still.tick && m.velocity.x < 0.0f;
+                        CHECK(pushed);
+                    }
+                    alice.Settle(25);
                     a->Heal(20.0f);
                     CHECK(a->Health() == 20.0f);
                     run("/tp 0 -50 0");
