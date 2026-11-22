@@ -13,7 +13,7 @@ namespace perlite {
         if (config.worldStorage != "leveldb" || config.dataDir.empty())
             return true;
         if (!LevelDb::Available()) {
-            LogWarn("this build cannot save worlds (no LevelDB); the world is kept in memory only");
+            LogWarn("This build cannot save worlds (no LevelDB); the world is kept in memory only");
             return true;
         }
         std::string name = config.levelName.empty() ? std::string("Bedrock level") : config.levelName;
@@ -47,10 +47,11 @@ namespace perlite {
                 if (auto it = gameRules.find(rule); it != gameRules.end() && !it->second.boolean)
                     it->second.value = value;
             levelLoaded = true;
-            LogInfo("world '" + info.name + "' loaded from " + dir.string() + " (seed " +
+            LogInfo("Loaded world '" + info.name + "' from " + dir.string() + " (seed " +
                     std::to_string(static_cast<int64_t>(config.seed)) + ")");
         } else {
-            LogInfo("new world at " + dir.string());
+            LogInfo("Creating a new world in " + dir.string() + " (seed " +
+                    std::to_string(static_cast<int64_t>(config.seed)) + ")");
         }
         storage = std::move(world);
         lastSave = std::chrono::steady_clock::now();
@@ -80,10 +81,14 @@ namespace perlite {
         return info;
     }
 
-    void Server::SaveWorld() {
+    void Server::SaveWorld(bool announce) {
         if (!storage)
             return;
         const auto began = std::chrono::steady_clock::now();
+        if (announce) {
+            LogInfo("Saving players");
+            LogInfo("Saving chunks for level '" + config.levelName + "'/minecraft:overworld");
+        }
         for (Session* s : InGamePlayers())
             SavePlayer(*s);
         size_t chunksSaved = chunks ? chunks->SaveDirty() : 0;
@@ -94,11 +99,15 @@ namespace perlite {
         storage->SaveLevel(CurrentLevelInfo());
         std::string error;
         if (!storage->Flush(&error) && !error.empty())
-            LogError("saving the world failed: " + error);
+            LogError("Saving the world failed: " + error);
         lastSave = std::chrono::steady_clock::now();
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(lastSave - began).count();
-        if (chunksSaved > 0)
-            LogInfo("saved " + std::to_string(chunksSaved) + " chunks in " + std::to_string(ms) + " ms");
+        const std::string summary =
+            "All chunks are saved (" + std::to_string(chunksSaved) + " chunks, " + std::to_string(ms) + " ms)";
+        if (announce)
+            LogInfo(summary);
+        else if (chunksSaved > 0)
+            LogDebug("Autosave: " + summary);
     }
 
     void Server::AutosaveTick() {
@@ -125,7 +134,8 @@ namespace perlite {
     void Server::CloseWorld() {
         if (!storage)
             return;
-        SaveWorld();
+        LogInfo("Saving worlds");
+        SaveWorld(true);
         if (chunks)
             chunks->SetStore(nullptr);
         for (auto& w : otherWorlds)

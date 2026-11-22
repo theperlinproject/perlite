@@ -62,6 +62,7 @@ namespace perlite {
         static int BlockXp(const std::string& javaBlock, int silkTouch, std::mt19937& rng);
         static int MobXp(const std::string& bedrockId, bool baby, bool hostile, std::mt19937& rng);
         static float Hardness(const std::string& bedrockBlock);
+        static std::string EffectiveTool(const std::string& bedrockBlock);
 
     private:
         LootTables();

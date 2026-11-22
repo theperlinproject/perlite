@@ -78,7 +78,7 @@ namespace perlite {
                         dc->send(std::move(msg));
                     }
                 } catch (const std::exception& e) {
-                    LogWarn("nethernet " + remote + ": send failed: " + e.what());
+                    LogWarn("NetherNet " + remote + ": send failed: " + e.what());
                     return false;
                 }
                 return true;
@@ -209,7 +209,7 @@ namespace perlite {
                 if (!config.dataDir.empty()) {
                     std::string note;
                     if (identity.LoadOrCreate(config.dataDir + "/nethernet-identity.pem", note) && !note.empty())
-                        LogInfo("nethernet identity " + note + " (sha-256 " + identity.Fingerprint() + ")");
+                        LogInfo("NetherNet identity: " + note + " (sha-256 " + identity.Fingerprint() + ")");
                 }
                 if (!identity.Valid()) {
                     error = "nethernet: could not create the server identity key";
@@ -220,6 +220,7 @@ namespace perlite {
                     return false;
                 running = true;
                 janitor = std::thread([this] {
+                    SetLogThreadName("NetherNet");
                     while (running) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(500));
                         Sweep();
@@ -351,7 +352,7 @@ namespace perlite {
                     peer->pc->setRemoteDescription(
                         rtc::Description(StripIdentityLines(req.body), rtc::Description::Type::Offer));
                 } catch (const std::exception& e) {
-                    LogWarn("nethernet: bad offer from " + remote + ": " + e.what());
+                    LogWarn("NetherNet: bad offer from " + remote + ": " + e.what());
                     res.status = 400;
                     res.contentType = "text/plain";
                     res.body = "Negotiation failed";
@@ -359,7 +360,7 @@ namespace perlite {
                 }
                 std::string answer = WaitForAnswer(peer);
                 if (answer.empty()) {
-                    LogWarn("nethernet " + remote + ": no answer could be made (ice gathering failed)");
+                    LogWarn("NetherNet " + remote + ": no answer could be made (ice gathering failed)");
                     peer->Close();
                     res.status = 503;
                     res.contentType = "text/plain";
@@ -422,7 +423,7 @@ namespace perlite {
                     std::mt19937_64 rng(networkId ^ static_cast<uint64_t>(
                                                          std::chrono::steady_clock::now().time_since_epoch().count()));
                     static const char* hex = "0123456789abcdef";
-                    for (int i = 0; i < 32; i++)
+                    for (int i = 0; i < 16; i++)
                         lanNonce += hex[rng() & 15];
                 }
                 nethernet::LanDiscovery::Callbacks cb;
@@ -432,7 +433,7 @@ namespace perlite {
                 };
                 std::string error;
                 if (lanDiscovery.Start(nethernet::lan::kPort, networkId, std::move(cb), error))
-                    LogInfo("lan discovery on udp " + std::to_string(nethernet::lan::kPort) +
+                    LogInfo("LAN discovery on UDP port " + std::to_string(nethernet::lan::kPort) +
                             " (shows under Friends > LAN Games)");
                 else
                     LogWarn(error + "; the server will not show up under LAN Games");
@@ -493,11 +494,11 @@ namespace perlite {
                     try {
                         existing->pc->addRemoteCandidate(rtc::Candidate(data, "0"));
                     } catch (const std::exception& e) {
-                        LogWarn("nethernet-lan " + address + ": bad candidate: " + e.what());
+                        LogWarn("LAN " + address + ": bad candidate: " + e.what());
                     }
                 } else if (type == "CONNECTERROR") {
                     if (existing) {
-                        LogInfo("nethernet-lan " + address + ": client gave up (error " + data + ")");
+                        LogDebug("LAN join from " + address + ": client gave up (error " + data + ")");
                         existing->Close();
                     }
                 }
@@ -517,7 +518,7 @@ namespace perlite {
                     peer->pc->setRemoteDescription(
                         rtc::Description(StripIdentityLines(offer), rtc::Description::Type::Offer));
                 } catch (const std::exception& e) {
-                    LogWarn("nethernet-lan: bad offer from " + address + ": " + e.what());
+                    LogWarn("LAN: bad offer from " + address + ": " + e.what());
                     SignalLan(sender, "CONNECTERROR", connection, "13");
                     return;
                 }
@@ -525,13 +526,14 @@ namespace perlite {
                     std::lock_guard lock(mutex);
                     peers[key] = peer;
                 }
-                LogInfo("nethernet-lan: join request from " + address);
+                LogDebug("LAN join request from " + address);
                 // Gathering takes a moment; keep the discovery socket free for the candidates.
                 {
                     std::lock_guard lock(workersMutex);
                     lanBusy++;
                 }
                 std::thread([this, peer, sender, connection] {
+                    SetLogThreadName("LAN");
                     AnswerLan(peer, sender, connection);
                     std::lock_guard lock(workersMutex);
                     lanBusy--;
@@ -547,7 +549,7 @@ namespace perlite {
                         peer->Close();
                         return;
                     }
-                    answer = nethernet::AddAnswerIdentity(answer, identity);
+                    // LAN answers carry no identity line: LAN offers have none, and the game answers without one.
                     SignalLan(sender, "CONNECTRESPONSE", connection, answer);
                     // Vanilla trickles candidates after the answer; send ours that way too.
                     const auto ufrag = SdpValues(answer, "a=ice-ufrag:");

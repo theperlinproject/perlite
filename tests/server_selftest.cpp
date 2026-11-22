@@ -219,20 +219,23 @@ static void TestProperties() {
     CHECK(d.name == c.name && d.gameMode == 1 && d.udpPortBegin == 19400 && d.udpPublicBegin == 21200 &&
           d.maxPlayers == 7);
     CHECK(static_cast<int64_t>(d.seed) == -1907856268LL && d.levelSeedText == "Perlin");
+    // Unknown keys are kept; keys of settings Perlite does not have are dropped when the file is saved.
     bool keptBogus = false, keptTicking = false;
     for (const auto& [k, v] : d.extraProperties) {
         keptBogus = keptBogus || (k == "max-players-bogus" && v == "1");
-        keptTicking = keptTicking || (k == "persistent-ticking-area-max-count" && v == "11");
+        keptTicking = keptTicking || k == "persistent-ticking-area-max-count";
     }
-    CHECK(keptBogus && keptTicking);
+    CHECK(keptBogus && !keptTicking);
     {
         std::ifstream in(path);
         const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         for (const char* key :
              {"server-name=", "allow-list=", "server-udp-ports=21200-21300:19400-19500",
-              "enable-lan-visibility=true", "transport=nethernet", "compression-threshold=1",
-              "block-network-ids-are-hashes=true", "server-build-radius-ratio=Disabled"})
+              "enable-lan-visibility=true", "compression-threshold=1", "block-network-ids-are-hashes=true"})
             CHECK(text.contains(key));
+        for (const char* key : {"transport=", "server-build-radius-ratio=", "persistent-ticking-area-max-count="})
+            CHECK(!text.contains(key));
+        CHECK(!text.contains("\n\n"));
     }
 
     const auto ports = [](const std::string& v) {

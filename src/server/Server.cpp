@@ -1,4 +1,8 @@
 #include "server/Server.hpp"
+#include "world/actor/mob/MobRegistry.hpp"
+#include "world/actor/mob/VanillaEntities.hpp"
+#include "world/level/block/VoxelShapes.hpp"
+#include "server/VanillaPack.hpp"
 #include "server/vanilla/BedrockData.hpp"
 #include "world/crafting/Recipes.hpp"
 
@@ -55,12 +59,18 @@ namespace perlite {
             return false;
         }
 
+        const auto startClock = std::chrono::steady_clock::now();
+        {
+            static const char* modes[] = {"SURVIVAL", "CREATIVE", "ADVENTURE", "SPECTATOR"};
+            LogInfo(std::string("Default game type: ") + modes[std::clamp(config.gameMode, 0, 3)]);
+        }
         if (config.randomSeed) {
             std::random_device device;
             config.seed = (static_cast<uint64_t>(device()) << 32) ^ device();
             config.randomSeed = false;
-            LogInfo("level-seed is empty: random seed " + std::to_string(static_cast<int64_t>(config.seed)));
+            LogInfo("No level-seed set, using random seed " + std::to_string(static_cast<int64_t>(config.seed)));
         }
+        LogInfo("Preparing level \"" + config.levelName + "\"");
         if (!OpenWorld(error))
             return false;
         if (config.compressionAlgorithm == "snappy") {
@@ -88,7 +98,7 @@ namespace perlite {
                     ": using the built-in list of " + std::to_string(catalog.Items().size()) +
                     " blocks; set block_data_dir to a folder with block_states.json and block_destroy.tsv");
             } else {
-                LogInfo("block data: " + std::to_string(catalog.StateCount()) + " states, " +
+                LogInfo("Block data: " + std::to_string(catalog.StateCount()) + " states, " +
                         std::to_string(catalog.Items().size()) + " items");
             }
             {
@@ -107,16 +117,34 @@ namespace perlite {
                         items.push_back(std::move(item));
                     }
                     catalog.UseVanillaItems(items);
-                    LogInfo("vanilla data: " + std::to_string(catalog.Items().size()) + " items, " +
+                    LogInfo("Vanilla data: " + std::to_string(catalog.Items().size()) + " items, " +
                             std::to_string(vanilla.BlockProperties().size()) + " data-driven blocks");
                 } else {
-                    LogWarn("vanilla item data not found" +
+                    LogWarn("Vanilla item data not found" +
                             (vanillaError.empty() ? std::string() : " (" + vanillaError + ")") +
                             ": Bedrock clients will not be able to join; set PERLITE_BEDROCK_DATA to the "
                             "data/bedrock folder");
                 }
             }
             BuildItemPackets();
+            {
+                // Mob sizes, scale, health and speed, and the block shapes, come from Mojang's vanilla
+                // behavior pack, downloaded on first start (it is not shipped with Perlite).
+                const std::string pack = vanillapack::Ensure(config.dataDir, config.downloadVanillaPack);
+                const size_t read = VanillaEntities::Instance().Load(pack);
+                if (read > 0) {
+                    const size_t matched = MobRegistry::Instance().ApplyVanilla(VanillaEntities::Instance());
+                    LogInfo("Vanilla behavior pack: " + std::to_string(read) + " entities read, " +
+                            std::to_string(matched) + " mobs updated from it");
+                } else {
+                    LogWarn("No vanilla behavior pack: mobs use built-in sizes");
+                }
+                const size_t shapes = VoxelShapes::Instance().Load(pack);
+                if (shapes > 0)
+                    LogInfo("Loaded " + std::to_string(shapes) + " block shapes");
+                else
+                    LogWarn("No block shapes (they come from the vanilla behavior pack): clients use full cubes");
+            }
             Recipes::Instance().Load();
             if (const CatalogItem* shield = catalog.ItemByName("minecraft:shield"))
                 net::context::SetShieldItemID(shield->networkId);
@@ -126,7 +154,7 @@ namespace perlite {
             error = "no terrain backend: " + choice.note;
             return false;
         }
-        LogInfo("terrain: " + std::string(choice.backend->Name()) +
+        LogInfo("Terrain generator: " + std::string(choice.backend->Name()) +
                 (choice.note.empty() ? "" : " (" + choice.note + ")"));
         {
             int x = 0, y = FlatSurfaceY(config), z = 0;
@@ -136,7 +164,7 @@ namespace perlite {
                 y = spawnY;
                 z = spawnZ;
             } else if (config.generator == "vanilla" && choice.backend->FindSpawn(x, y, z))
-                LogInfo("spawn at " + std::to_string(x) + ", " + std::to_string(y) + ", " +
+                LogInfo("World spawn at " + std::to_string(x) + ", " + std::to_string(y) + ", " +
                         std::to_string(z) + " (" +
                         std::to_string(static_cast<int>(std::chrono::duration<double, std::milli>(
                                                             std::chrono::steady_clock::now() - spawnStart)
@@ -177,7 +205,10 @@ namespace perlite {
             }
             if (!nethernet->Start(events, error))
                 return false;
-            LogInfo("nethernet signalling on " + config.bindAddress + ":" + std::to_string(config.port));
+            LogInfo("Starting Minecraft server on " +
+                    (config.bindAddress == "0.0.0.0" || config.bindAddress.empty() ? std::string("*")
+                                                                                    : config.bindAddress) +
+                    ":" + std::to_string(config.port) + " (TCP join requests, UDP gameplay)");
         }
         {
             const bool persist = !config.loopbackOnly;
@@ -193,7 +224,7 @@ namespace perlite {
                 for (const AccessEntry& e : legacyOps.Entries())
                     permissionList.SetPermission(e.name, e.xuid, "operator");
                 if (!legacyOps.Entries().empty())
-                    LogInfo("imported " + std::to_string(legacyOps.Entries().size()) +
+                    LogInfo("Imported " + std::to_string(legacyOps.Entries().size()) +
                             " operators from ops.json into permissions.json");
             }
             for (const std::string& o : config.operators)
@@ -203,20 +234,82 @@ namespace perlite {
                 allowList.Save();
             }
             if (config.whitelist && !config.loopbackOnly)
-                LogInfo("allow-list is on: " + std::to_string(allowList.Entries().size()) + " entries in " +
+                LogInfo("Allow-list is on: " + std::to_string(allowList.Entries().size()) + " entries in " +
                         allowList.Path());
         }
         packs.Load(config.loopbackOnly ? std::string() : config.dataDir, config.texturepackRequired);
         plugins->LoadDirectory(config.pluginDir);
         started = true;
-        LogInfo("server '" + config.name + "' ready");
+        PrepareSpawnArea();
+        LogInfo("Done (" + [&] {
+            char buf[32];
+            std::snprintf(buf, sizeof buf, "%.3f",
+                          std::chrono::duration<double>(std::chrono::steady_clock::now() - startClock).count());
+            return std::string(buf);
+        }() + "s)! For help, type \"help\"");
+
         return true;
+    }
+
+    void Server::NoteLag(std::chrono::milliseconds behind) {
+        static std::chrono::steady_clock::time_point lastWarned;
+        const auto now = std::chrono::steady_clock::now();
+        if (behind < std::chrono::milliseconds(2000) || now - lastWarned < std::chrono::seconds(15))
+            return;
+        lastWarned = now;
+        const auto tickMs = std::chrono::duration_cast<std::chrono::milliseconds>(TickDelay()).count();
+        LogWarn("Can't keep up! Is the server overloaded? Running " + std::to_string(behind.count()) + "ms or " +
+                std::to_string(behind.count() / std::max<int64_t>(1, tickMs)) + " ticks behind");
+    }
+
+    void Server::PrepareSpawnArea() {
+        constexpr int kRadius = 4; // 9 x 9 chunks, the area kept loaded around spawn
+        constexpr auto kLimit = std::chrono::seconds(60);
+        if (config.loopbackOnly)
+            return;
+        LogInfo("Preparing start region for dimension minecraft:overworld");
+        ChunkManager& world = World(kOverworld);
+        const ChunkPos centre{spawnX >> 4, spawnZ >> 4};
+        std::vector<ChunkPos> area;
+        for (int dx = -kRadius; dx <= kRadius; dx++)
+            for (int dz = -kRadius; dz <= kRadius; dz++)
+                area.push_back({centre.x + dx, centre.z + dz});
+        const auto begin = std::chrono::steady_clock::now();
+        auto lastReport = begin;
+        int lastPercent = -1;
+        while (true) {
+            size_t ready = 0;
+            for (const ChunkPos& pos : area)
+                ready += world.Get(pos) ? 1 : 0;
+            const int percent = static_cast<int>(ready * 100 / area.size());
+            const auto now = std::chrono::steady_clock::now();
+            if (percent != lastPercent && (now - lastReport >= std::chrono::seconds(1) || ready == area.size())) {
+                LogInfo("Preparing spawn area: " + std::to_string(percent) + "%");
+                lastReport = now;
+                lastPercent = percent;
+            }
+            if (ready == area.size())
+                break;
+            if (now - begin > kLimit) {
+                LogWarn("Spawn area is still generating after " + std::to_string(kLimit.count()) +
+                        "s; finishing it in the background");
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            world.Pump();
+        }
+        LogInfo("Time elapsed: " +
+                std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - begin)
+                                   .count()) +
+                " ms");
     }
 
     void Server::Stop() {
         if (!started)
             return;
         started = false;
+        LogInfo("Stopping server");
         locateCancel = true;
         for (std::thread& t : locateThreads)
             if (t.joinable())
@@ -243,6 +336,7 @@ namespace perlite {
             next += TickDelay();
             const auto now = clock::now();
             if (next < now) {
+                NoteLag(std::chrono::duration_cast<std::chrono::milliseconds>(now - next));
                 next = now;
             } else {
                 std::this_thread::sleep_until(next);
@@ -296,6 +390,7 @@ namespace perlite {
             TickContainers();
             TickPortals();
             TickGravity();
+            TickRandom();
             plugins->Pump();
             AutosaveTick();
             if (plugins->AnyoneListens(abi::Event::Tick))
@@ -625,15 +720,15 @@ namespace perlite {
             if (config.terrainBackend == "gpu" || config.terrainBackend == "auto") {
                 std::string note;
                 backend = CreateGpuDimensionBackend(config, dimension, note);
-                LogInfo("the " + label + " on the gpu: " + note);
+                LogInfo("GPU terrain for the " + label + ": " + note);
             }
             if (!backend)
                 backend = vanilla::VanillaDimensionBackend::Create(config, dimension, error);
             if (!backend) {
-                LogError("could not start the " + label + ": " + error);
+                LogError("Could not start the " + label + ": " + error);
                 return *chunks;
             }
-            LogInfo("generating the " + label + " with " + backend->Name());
+            LogInfo("Generating the " + label + " with " + backend->Name());
             slot = std::make_unique<ChunkManager>(std::move(backend), config.maxThreads, dimension);
             slot->SetStore(storage.get());
         }
@@ -742,7 +837,16 @@ namespace perlite {
     }
 
     void Server::OnPlayerJoined(Session& joined) {
-        LogInfo(joined.Name() + " joined the game (" + joined.Conn().Describe() + ")");
+        {
+            char at[96];
+            std::snprintf(at, sizeof at, "(%.1f, %.1f, %.1f)", joined.X(), joined.Y(), joined.Z());
+            std::string address = joined.Conn().Describe();
+            if (const size_t sp = address.find(' '); sp != std::string::npos)
+                address.erase(0, sp + 1);
+            LogInfo(joined.Name() + "[/" + address + "] logged in with entity id " +
+                    std::to_string(joined.Id()) + " at " + at);
+            LogInfo(joined.Name() + " joined the game");
+        }
         for (Session* other : PlayersIn(joined.DimensionId())) {
             if (other == &joined)
                 continue;
@@ -765,7 +869,8 @@ namespace perlite {
     }
 
     void Server::OnPlayerLeft(Session& left) {
-        LogInfo(left.Name() + " left");
+        LogInfo(left.Name() + " lost connection: " + left.LeaveReason());
+        LogInfo(left.Name() + " left the game");
         SavePlayer(left);
         for (Session* other : PlayersIn(left.DimensionId()))
             if (other != &left)
@@ -797,6 +902,8 @@ namespace perlite {
     }
 
     void Server::RunPlayerCommand(Session& from, const std::string& line) {
+        const std::string trimmed = str::Trim(line);
+        LogInfo(from.Name() + " issued server command: " + (trimmed.starts_with("/") ? "" : "/") + trimmed);
         RunCommand(&from, line);
     }
 
@@ -814,10 +921,14 @@ namespace perlite {
         if (text.empty())
             return;
         const auto say = [from](const std::string& m) {
-            if (from)
+            if (from) {
                 from->SendRaw(m);
-            else
+                // The console sees what a player's command did, as "[name: result]".
+                if (!m.empty())
+                    LogInfo("[" + from->Name() + ": " + m + "]");
+            } else {
                 LogInfo(m);
+            }
         };
         const size_t space = text.find(' ');
         const std::string name = str::Lower(text.substr(0, space));

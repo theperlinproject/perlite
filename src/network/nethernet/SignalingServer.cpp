@@ -259,7 +259,10 @@ namespace perlite::nethernet {
             return false;
         }
         running = true;
-        acceptThread = std::thread([this] { AcceptLoop(); });
+        acceptThread = std::thread([this] {
+            SetLogThreadName("Signalling");
+            AcceptLoop();
+        });
         return true;
     }
 
@@ -304,6 +307,7 @@ namespace perlite::nethernet {
                 clients++;
             }
             std::thread([this, c] {
+                SetLogThreadName("Signalling");
                 Serve(static_cast<intptr_t>(c));
                 std::lock_guard lock(clientsMutex);
                 clients--;

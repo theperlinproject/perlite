@@ -1,3 +1,4 @@
+#include "common/Log.hpp"
 #include <cstdlib>
 #include "world/level/chunk/ChunkManager.hpp"
 #include "world/level/storage/WorldStorage.hpp"
@@ -40,7 +41,10 @@ namespace perlite {
                 threads = std::min(threads, maxThreads);
         }
         for (size_t i = 0; i < threads; i++)
-            workers.emplace_back([this] { Worker(); });
+            workers.emplace_back([this, n = workers.size() + 1] {
+                SetLogThreadName("Worker-Main-" + std::to_string(n));
+                Worker();
+            });
     }
 
     ChunkManager::~ChunkManager() {

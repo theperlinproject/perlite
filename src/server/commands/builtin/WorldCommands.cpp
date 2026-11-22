@@ -181,6 +181,125 @@ namespace perlite {
                 ApplyBlock(dim, x, y, z, block);
                 say(c.source, "Changed the block at " + BlockPosText(x, y, z));
             });
+        // Copies the blocks of one region to another; masked skips air, move clears the source.
+        add({"clone"}, "Copy blocks from one region to another", true,
+            {"<begin:blockpos> <end:blockpos> <destination:blockpos> [mask:enum(replace|masked)] "
+             "[clone:enum(normal|force|move)]",
+             "<begin:blockpos> <end:blockpos> <destination:blockpos> filtered <clone:enum(normal|force|move)> "
+             "<tile:block>"},
+            [this, say, fail, loaded, registryOf](CommandCtx& c) {
+                int lo[3], hi[3], to[3];
+                for (int k = 0; k < 3; k++) {
+                    const size_t i = static_cast<size_t>(k);
+                    const int a = static_cast<int>(c["begin"].pos[i]), b = static_cast<int>(c["end"].pos[i]);
+                    lo[k] = std::min(a, b);
+                    hi[k] = std::max(a, b);
+                    to[k] = static_cast<int>(c["destination"].pos[i]);
+                }
+                const int64_t volume =
+                    static_cast<int64_t>(hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1);
+                if (volume > 32768) {
+                    fail(c.source, "Too many blocks in the specified area (maximum 32768, specified " +
+                                       std::to_string(volume) + ")");
+                    return;
+                }
+                const std::string mask = c.overload == 1 ? "filtered" : c.Has("mask") ? c["mask"].text : "replace";
+                const std::string how = c.Has("clone") ? c["clone"].text : "normal";
+                const bool overlap = to[0] <= hi[0] && to[0] + (hi[0] - lo[0]) >= lo[0] && to[1] <= hi[1] &&
+                                     to[1] + (hi[1] - lo[1]) >= lo[1] && to[2] <= hi[2] &&
+                                     to[2] + (hi[2] - lo[2]) >= lo[2];
+                if (overlap && how != "force") {
+                    fail(c.source, "Source and destination can not overlap");
+                    return;
+                }
+                const int dim = CommandDimension(c.source);
+                const DimensionRange range = RangeOf(dim);
+                if (lo[1] < range.minY || hi[1] > range.MaxY() || to[1] < range.minY ||
+                    to[1] + (hi[1] - lo[1]) > range.MaxY()) {
+                    fail(c.source, "That position is outside the world");
+                    return;
+                }
+                for (int pass = 0; pass < 2; pass++) {
+                    const int ox = pass ? to[0] : lo[0], oz = pass ? to[2] : lo[2];
+                    for (int x = ox >> 4; x <= (ox + hi[0] - lo[0]) >> 4; x++)
+                        for (int z = oz >> 4; z <= (oz + hi[2] - lo[2]) >> 4; z++)
+                            if (!loaded(dim, x * 16, z * 16)) {
+                                fail(c.source, "That position is not loaded");
+                                return;
+                            }
+                }
+                const uint16_t tile = mask == "filtered" ? registryOf(c["tile"]) : 0;
+                struct Copy {
+                    int dx, dy, dz;
+                    uint16_t block;
+                };
+                std::vector<Copy> copies;
+                for (int x = lo[0]; x <= hi[0]; x++)
+                    for (int y = lo[1]; y <= hi[1]; y++)
+                        for (int z = lo[2]; z <= hi[2]; z++) {
+                            const uint16_t b = World(dim).GetBlock(x, y, z);
+                            if (mask == "masked" && b == BlockRegistry::kAir)
+                                continue;
+                            if (mask == "filtered" && b != tile)
+                                continue;
+                            copies.push_back({x - lo[0], y - lo[1], z - lo[2], b});
+                        }
+                if (how == "move")
+                    for (const Copy& k : copies)
+                        ApplyBlock(dim, lo[0] + k.dx, lo[1] + k.dy, lo[2] + k.dz, BlockRegistry::kAir);
+                int changed = 0;
+                for (const Copy& k : copies) {
+                    const int x = to[0] + k.dx, y = to[1] + k.dy, z = to[2] + k.dz;
+                    if (World(dim).GetBlock(x, y, z) == k.block)
+                        continue;
+                    ApplyBlock(dim, x, y, z, k.block);
+                    changed++;
+                }
+                if (changed == 0)
+                    fail(c.source, "No blocks cloned");
+                else
+                    say(c.source, std::to_string(changed) + " blocks cloned");
+            });
+
+        // Compares two regions block by block.
+        add({"testforblocks"}, "Tests whether the blocks in two regions match", true,
+            {"<begin:blockpos> <end:blockpos> <destination:blockpos> [mode:enum(all|masked)]"},
+            [this, say, fail](CommandCtx& c) {
+                int lo[3], hi[3], to[3];
+                for (int k = 0; k < 3; k++) {
+                    const size_t i = static_cast<size_t>(k);
+                    const int a = static_cast<int>(c["begin"].pos[i]), b = static_cast<int>(c["end"].pos[i]);
+                    lo[k] = std::min(a, b);
+                    hi[k] = std::max(a, b);
+                    to[k] = static_cast<int>(c["destination"].pos[i]);
+                }
+                const int64_t volume =
+                    static_cast<int64_t>(hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1);
+                if (volume > 524288) {
+                    fail(c.source, "Too many blocks in the specified area (maximum 524288, specified " +
+                                       std::to_string(volume) + ")");
+                    return;
+                }
+                const bool masked = c.Has("mode") && c["mode"].text == "masked";
+                const int dim = CommandDimension(c.source);
+                int64_t compared = 0;
+                for (int x = lo[0]; x <= hi[0]; x++)
+                    for (int y = lo[1]; y <= hi[1]; y++)
+                        for (int z = lo[2]; z <= hi[2]; z++) {
+                            const uint16_t a = World(dim).GetBlock(x, y, z);
+                            if (masked && a == BlockRegistry::kAir)
+                                continue;
+                            const uint16_t b =
+                                World(dim).GetBlock(to[0] + x - lo[0], to[1] + y - lo[1], to[2] + z - lo[2]);
+                            if (a != b) {
+                                fail(c.source, "Source and destination are not the same");
+                                return;
+                            }
+                            compared++;
+                        }
+                say(c.source, std::to_string(compared) + " blocks compared");
+            });
+
         add({"fill"}, "Fill a region with a block", true,
             {"<from:blockpos> <to:blockpos> <block:block> [mode:enum(destroy|hollow|keep|outline|replace)]",
              "<from:blockpos> <to:blockpos> <block:block> replace <filter:block>"},

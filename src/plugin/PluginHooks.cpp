@@ -115,7 +115,7 @@ namespace perlite {
             e.z = m.z;
             e.yaw = m.yaw;
             e.health = m.health;
-            e.maxHealth = m.def->health;
+            e.maxHealth = m.maxHealth > 0 ? m.maxHealth : m.def->health;
             e.baby = m.baby;
             return e;
         }
@@ -707,7 +707,7 @@ namespace perlite {
             mobWorld->Kill(r.entity);
             return {};
         }
-        m->health = std::min(r.health, m->def->health);
+        m->health = std::min(r.health, m->maxHealth > 0 ? m->maxHealth : m->def->health);
         return {};
     }
 

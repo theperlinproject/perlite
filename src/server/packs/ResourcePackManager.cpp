@@ -177,7 +177,7 @@ namespace perlite {
                 ResourcePack pack;
                 std::string error;
                 if (!ReadPack(e.string(), pack, error)) {
-                    LogWarn("pack " + e.filename().string() + " skipped: " + error);
+                    LogWarn("Pack " + e.filename().string() + " skipped: " + error);
                     continue;
                 }
                 if (const fs::path key = fs::path(e.string() + ".key"); fs::is_regular_file(key, ec)) {
@@ -185,11 +185,11 @@ namespace perlite {
                     std::getline(in, pack.contentKey);
                 }
                 if (Find(pack.uuid)) {
-                    LogWarn("pack " + e.filename().string() + " skipped: uuid " + pack.uuid +
+                    LogWarn("Pack " + e.filename().string() + " skipped: uuid " + pack.uuid +
                             " is already loaded");
                     continue;
                 }
-                LogInfo("pack " + pack.name + " " + pack.version + " (" +
+                LogInfo("Resource pack " + pack.name + " " + pack.version + " (" +
                         std::to_string(pack.archive.size() / 1024) + " KiB)" +
                         (pack.behavior ? " [behavior]" : ""));
                 packs.push_back(std::move(pack));

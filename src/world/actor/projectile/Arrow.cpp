@@ -2,7 +2,7 @@
 
 namespace perlite {
     void ActorManager::Shoot(Mob& m, Session& at) {
-        Mob* arrow = Spawn("minecraft:arrow", m.x, m.y + m.def->height * 0.85, m.z, false);
+        Mob* arrow = Spawn("minecraft:arrow", m.x, m.y + MobRegistry::Instance().BodyOf(m).height * 0.85, m.z, false);
         if (!arrow)
             return;
         Mob* self = Find(m.id);
@@ -48,8 +48,9 @@ namespace perlite {
                 continue;
             if (!shooter && (o.def->flags & mobflag::Hostile))
                 continue;
-            const double hw = o.def->width * (o.baby ? 0.25 : 0.5) + 0.15;
-            const double h = o.def->height * (o.baby ? 0.5 : 1.0);
+            const MobBody body = MobRegistry::Instance().BodyOf(o);
+            const double hw = body.width * 0.5 + 0.15;
+            const double h = body.height;
             if (std::abs(o.x - m.x) < hw && std::abs(o.z - m.z) < hw && m.y >= o.y - 0.1 && m.y <= o.y + h) {
                 Hurt(o, damage, m.x - m.vx, m.z - m.vz, shooter);
                 m.age = 2000;

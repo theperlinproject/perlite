@@ -1,4 +1,5 @@
 #include "network/session/SessionInternal.hpp"
+#include "world/level/block/VoxelShapes.hpp"
 #include "server/ServerData.hpp"
 #include "server/vanilla/BedrockData.hpp"
 
@@ -135,7 +136,7 @@ namespace perlite {
         }
 
         clientKey = login2.clientKey;
-        LogInfo(name + " logging in from " + connection->Describe());
+        LogInfo("UUID of player " + name + " is " + uuidText);
         if (server.Config().networkEncryption && (!connection->Local() || server.Config().encryptLocal) &&
             !clientKey.empty()) {
             std::string token, why;
@@ -256,7 +257,7 @@ namespace perlite {
             jigsaw.structureData.bytes = serverdata::JigsawStructureDataNbt();
             Send(jigsaw);
         }
-        Send(proto::VoxelShapesPacket{});
+        Send(VoxelShapes::Instance().Packet());
         const ServerConfig& cfg = server.Config();
         proto::StartGamePacket g;
         g.entityId = static_cast<int64_t>(runtimeId);

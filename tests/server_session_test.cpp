@@ -762,6 +762,23 @@ int main(int argc, char** argv) {
                         a->Inventory().armor[1] = ItemStack{};
                     }
                     alice.Settle(25);
+                    {
+                        proto::PlayerAuthInputPacket still;
+                        still.position = {static_cast<float>(a->X()), static_cast<float>(a->Y()),
+                                          static_cast<float>(a->Z())};
+                        still.tick = server.TickCount() + 7000;
+                        alice.Send(still);
+                        alice.Settle();
+                        alice.inbox.clear();
+                        CHECK(a->Damage(1.0f, Session::DamageCause::Mob, a->X() + 1, a->Z()));
+                        alice.Settle(1);
+                        bool pushed = false;
+                        for (const auto& m : alice.Take<proto::SetEntityMotionPacket>())
+                            if (m.runtimeEntityId == a->Id())
+                                pushed = m.tick == still.tick && m.velocity.x < 0.0f;
+                        CHECK(pushed);
+                    }
+                    alice.Settle(25);
                     a->Heal(20.0f);
                     CHECK(a->Health() == 20.0f);
                     run("/tp 0 -50 0");
@@ -916,6 +933,14 @@ int main(int argc, char** argv) {
             }
             CHECK(!packet.dynamicEnums.empty());
         }
+        run("/fill 10 -60 10 11 -60 11 stone");
+        alice.Take<proto::TextPacket>();
+        run("/clone 10 -60 10 11 -60 11 20 -60 20");
+        auto cloned = alice.Take<proto::TextPacket>();
+        CHECK(!cloned.empty() && cloned[0].message.find("4 blocks cloned") == 0);
+        run("/testforblocks 10 -60 10 11 -60 11 20 -60 20");
+        cloned = alice.Take<proto::TextPacket>();
+        CHECK(!cloned.empty() && cloned[0].message.find("4 blocks compared") == 0);
         run("/give Alice stone 5");
         auto lines = alice.Take<proto::TextPacket>();
         CHECK(!lines.empty() && lines[0].message.find("Gave 5 stone to Alice") == 0);
@@ -1123,6 +1148,57 @@ int main(int argc, char** argv) {
         carol.Send(stop);
         carol.Settle();
         CHECK(survival.GetBlock(1, -64, 1, n) == perlin::abi::Status::Ok && n == "minecraft:bedrock");
+
+        // Survival digging shows the crack animation: a start event with the break speed, a stop on abort.
+        {
+            const uint16_t stone = BlockCatalog::Instance().DefaultBlock("minecraft:stone");
+            survival.World(0).SetBlock(2, -60, 2, stone);
+            carol.inbox.clear();
+            proto::PlayerAuthInputPacket in;
+            in.position = {0.5f, -58.38f, 0.5f};
+            in.tick = 1;
+            proto::PlayerAuthInputPacketBlockActionEntry start;
+            start.action = proto::Action::StartBreak;
+            start.position = {2, -60, 2};
+            start.face = 1;
+            in.blockAction = std::vector{start};
+            carol.Send(in);
+            carol.Settle();
+            auto events = carol.Take<proto::LevelEventPacket>();
+            bool started = false;
+            for (const auto& e : events)
+                started |= e.event == proto::LevelEventPacketEvent::BlockStartBreak && e.data > 0 && e.data < 65535 &&
+                           e.position.x == 2.5f && e.position.y == -59.5f;
+            CHECK(started);
+            proto::PlayerAuthInputPacketBlockActionEntry abort = start;
+            abort.action = proto::Action::AbortBreak;
+            in.blockAction = std::vector{abort};
+            in.tick = 2;
+            carol.Send(in);
+            carol.Settle();
+            bool stopped = false;
+            for (const auto& e : carol.Take<proto::LevelEventPacket>())
+                stopped |= e.event == proto::LevelEventPacketEvent::BlockStopBreak;
+            CHECK(stopped);
+            CHECK(survival.GetBlock(2, -60, 2, n) == perlin::abi::Status::Ok && n == "minecraft:stone");
+        }
+
+        // Random ticks grow crops on farmland near players.
+        {
+            const uint16_t farmland = BlockCatalog::Instance().DefaultBlock("minecraft:farmland");
+            const uint16_t wheat = BlockCatalog::Instance().DefaultBlock("minecraft:wheat");
+            survival.World(0).SetBlock(3, -61, 3, farmland);
+            survival.World(0).SetBlock(3, -60, 3, wheat);
+            CHECK(survival.SetRule("randomtickspeed", 4096));
+            carol.Settle(40);
+            const uint16_t now = survival.World(0).GetBlock(3, -60, 3);
+            int growth = 0;
+            for (const auto& [k, v] : BlockRegistry::Instance().States(now))
+                if (k == "growth")
+                    growth = std::get<int32_t>(v);
+            CHECK(BlockRegistry::Instance().Name(now) == "minecraft:wheat" && growth > 0);
+            CHECK(survival.SetRule("randomtickspeed", 1));
+        }
         survival.Stop();
     }
     fs::remove_all(plugins);

@@ -371,6 +371,12 @@ namespace perlite {
         return it == t.end() ? 1.0f : it->second.hardness;
     }
 
+    std::string LootTables::EffectiveTool(const std::string& bedrockBlock) {
+        const auto& t = HarvestTable();
+        const auto it = t.find(Bare(bedrockBlock));
+        return it == t.end() ? std::string() : it->second.tool;
+    }
+
     bool LootTables::CanHarvest(const std::string& bedrockBlock, const std::string& toolName) {
         const std::string block = Bare(bedrockBlock);
         const std::string tool = Bare(toolName);

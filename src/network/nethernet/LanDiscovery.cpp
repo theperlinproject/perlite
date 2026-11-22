@@ -329,7 +329,10 @@ namespace perlite::nethernet {
         }
         sock = static_cast<intptr_t>(s);
         running = true;
-        thread = std::thread([this] { Loop(); });
+        thread = std::thread([this] {
+            SetLogThreadName("LAN");
+            Loop();
+        });
         return true;
     }
 

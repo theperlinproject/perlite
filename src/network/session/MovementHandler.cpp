@@ -64,6 +64,7 @@ namespace perlite {
         proto::PlayerAuthInputPacket in;
         if (!Decode(body, in) || (state != State::InGame && state != State::Loading))
             return;
+        inputTick = in.tick;
         const double previousY = posY;
         SetPosition(in.position.x, in.position.y, in.position.z, in.pitch, in.yaw);
         const bool wasSneaking = sneaking;
@@ -82,16 +83,7 @@ namespace perlite {
         }
         if (!awaitingDimensionAck)
             MovementTick(in, previousY);
-        if (in.blockAction && !isVisitor && gameMode != 6 && !dead)
-            for (const auto& action : *in.blockAction) {
-                const auto& at = action.position;
-                if (action.action == proto::Action::PredictBreak ||
-                    (action.action == proto::Action::StartBreak && creative) ||
-                    action.action == proto::Action::CreativePlayerDestroyBlock) {
-                    lastActive = std::chrono::steady_clock::now();
-                    server.PlayerBreak(*this, at.x, at.y, at.z);
-                }
-            }
+        HandleBlockActions(in);
     }
 
     void Session::OnMovePlayer(std::span<const uint8_t> body) {
@@ -226,7 +218,7 @@ namespace perlite {
         proto::SetEntityMotionPacket p;
         p.runtimeEntityId = runtimeId;
         p.velocity = {static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
-        p.tick = server.TickCount();
+        p.tick = inputTick;
         Send(p);
     }
 

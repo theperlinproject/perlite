@@ -1,4 +1,5 @@
 #include "network/session/SessionInternal.hpp"
+#include "common/Strings.hpp"
 
 #include <algorithm>
 
@@ -63,6 +64,8 @@ namespace perlite {
     void Session::Kick(const std::string& reason) {
         if (state == State::Closed)
             return;
+        if (leaveReason == "Disconnected")
+            leaveReason = str::StripFormatting(reason);
         proto::DisconnectPacket p;
         p.reason = proto::DisconnectFailReason::Unknown;
         p.message = reason;
@@ -235,7 +238,9 @@ namespace perlite {
         }
         if ((state == State::InGame && now - lastPacket > kIdleTimeout) ||
             (state != State::InGame && now - stateSince > kLoginTimeout)) {
-            LogInfo((name.empty() ? connection->Describe() : name) + " timed out");
+            leaveReason = "Timed out";
+            if (state != State::InGame)
+                LogInfo((name.empty() ? connection->Describe() : name) + " lost connection: Timed out");
             Close();
             return;
         }
@@ -243,6 +248,7 @@ namespace perlite {
         if (idleMinutes > 0 && state == State::InGame && !server.Config().loopbackOnly &&
             now - lastActive > std::chrono::minutes(idleMinutes)) {
             LogInfo(name + " kicked: idle for " + std::to_string(idleMinutes) + " minutes");
+            leaveReason = "Kicked for being idle";
             Kick("disconnectionScreen.idleTimeout");
             return;
         }

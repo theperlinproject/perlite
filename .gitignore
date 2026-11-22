@@ -5,3 +5,5 @@ out/
 .idea/
 *.swp
 __pycache__/
+vanilla_behavior_pack/
+vanilla_behavior_pack.part/

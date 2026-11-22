@@ -1,5 +1,4 @@
 #include "common/TaskGroup.hpp"
-#include "main/SetupWizard.hpp"
 #include "server/Config.hpp"
 #include "common/Log.hpp"
 #include "server/Server.hpp"
@@ -41,7 +40,6 @@ int main(int argc, char** argv) {
 #endif
     std::string dir = ".";
     int port = 0;
-    bool wizard = true;
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i];
         if (a == "--data" && i + 1 < argc)
@@ -49,16 +47,22 @@ int main(int argc, char** argv) {
         else if (a == "--port" && i + 1 < argc)
             port = std::atoi(argv[++i]);
         else if (a == "--no-wizard")
-            wizard = false;
-        else if (a == "--help" || a == "-h") {
-            std::cout << "perlite [--data <dir>] [--port <n>] [--no-wizard]\n"
-                         "  reads <dir>/server.properties (written with defaults on first run; the bds file "
-                         "format), allowlist.json,\n"
-                         "  permissions.json and plugins from <dir>/plugins\n";
+            continue; // accepted for old scripts; there is no wizard any more
+        else if (a == "--print-default-properties") {
+            std::cout << ServerConfig::FirstRun().PropertiesText();
+            return 0;
+        } else if (a == "--help" || a == "-h") {
+            std::cout << "perlite [--data <dir>] [--port <n>]\n"
+                         "  reads <dir>/server.properties (a commented default is written if it is missing),\n"
+                         "  allowlist.json, permissions.json and plugins from <dir>/plugins\n";
             return 0;
         }
     }
     std::filesystem::create_directories(dir);
+    SetLogThreadName("Server thread");
+    OpenLogFile(dir + "/logs");
+    LogInfo("Starting Minecraft: Bedrock Edition server version 1.26.60 (protocol 2225)");
+    LogInfo("Loading properties");
 
     const std::string propsPath = dir + "/server.properties";
     const bool hadProps = std::filesystem::exists(propsPath);
@@ -70,13 +74,11 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (!hadProps && !hadLegacy) {
-        config.randomSeed = true;
-        config.udpPortsSet = true;
-        config.udpPortBegin = config.udpPortEnd = config.port;
-        if (wizard && InteractiveConsole())
-            RunSetupWizard(config);
-        config.SaveProperties(propsPath);
-        LogInfo("wrote default " + propsPath);
+        config = ServerConfig::FirstRun();
+        if (config.SaveProperties(propsPath))
+            LogInfo("No server.properties found, wrote the default one to " + propsPath);
+        else
+            LogWarn("Could not write " + propsPath + "; starting with the default settings");
     }
     config.dataDir = dir;
 
@@ -93,7 +95,7 @@ int main(int argc, char** argv) {
 
     Server server(config);
     if (!server.Start(error)) {
-        LogError("cannot start: " + error);
+        LogError("Cannot start: " + error);
         return 1;
     }
     g_server = &server;
@@ -106,6 +108,7 @@ int main(int argc, char** argv) {
     };
     const auto input = std::make_shared<ConsoleInput>();
     std::thread([input] {
+        SetLogThreadName("Console");
         std::string line;
         while (std::getline(std::cin, line)) {
             std::lock_guard lock(input->mutex);
@@ -128,12 +131,12 @@ int main(int argc, char** argv) {
         server.Tick();
         next += server.TickDelay();
         const auto now = clock::now();
-        if (next < now)
+        if (next < now) {
+            server.NoteLag(std::chrono::duration_cast<std::chrono::milliseconds>(now - next));
             next = now;
-        else
+        } else
             std::this_thread::sleep_until(next);
     }
-    LogInfo("stopping");
     g_server = nullptr;
     server.Stop();
     perlite::ProcessTasks().Shutdown();

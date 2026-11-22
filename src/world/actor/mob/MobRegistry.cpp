@@ -1,4 +1,5 @@
 #include "world/actor/mob/MobRegistry.hpp"
+#include "world/actor/ActorManager.hpp"
 
 namespace perlite {
 
@@ -28,6 +29,53 @@ namespace perlite {
         byId.emplace(def.id, types.size());
         types.push_back({def, category, std::move(behavior)});
         return types.back();
+    }
+
+    size_t MobRegistry::ApplyVanilla(const VanillaEntities& vanilla) {
+        size_t matched = 0;
+        for (MobType& type : types) {
+            const VanillaEntity* v = vanilla.Get(type.def.id);
+            if (!v)
+                continue;
+            matched++;
+            if (v->width > 0 && v->height > 0) {
+                type.def.width = v->width;
+                type.def.height = v->height;
+            }
+            if (v->health > 0)
+                type.def.health = v->health;
+            if (v->speed > 0)
+                type.def.speed = v->speed;
+            if (v->damage >= 0)
+                type.def.damage = v->damage;
+            type.def.scale = v->scale > 0 ? v->scale : 1.0f;
+            type.def.babyScale = v->babyScale;
+            type.def.babyWidth = v->babyWidth;
+            type.def.babyHeight = v->babyHeight;
+            type.sizes = v->sizes;
+            type.variants = v->variants;
+        }
+        return matched;
+    }
+
+    MobBody MobRegistry::BodyOf(const Mob& mob) const {
+        MobBody body;
+        if (!mob.def)
+            return body;
+        const MobDef& d = *mob.def;
+        const MobType* type = TypeOf(mob.def);
+        if (type && mob.size >= 0 && mob.size < static_cast<int>(type->sizes.size())) {
+            // Size classes keep scale 1: the client sizes the model from the variant.
+            const VanillaSize& s = type->sizes[static_cast<size_t>(mob.size)];
+            return {s.width, s.height, 1.0f};
+        }
+        body = {d.width, d.height, d.scale > 0 ? d.scale : 1.0f};
+        if (mob.baby) {
+            body.width = d.babyWidth > 0 ? d.babyWidth : d.width * 0.5f;
+            body.height = d.babyHeight > 0 ? d.babyHeight : d.height * 0.5f;
+            body.scale = d.babyScale > 0 ? d.babyScale : body.scale * 0.5f;
+        }
+        return body;
     }
 
     void MobRegistry::Alias(std::string_view alias, std::string_view identifier) {

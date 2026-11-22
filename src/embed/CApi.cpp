@@ -130,6 +130,7 @@ PERLITE_API int perlite_run_async(perlite_server* s) {
     if (!s || s->asyncRunning.exchange(true))
         return -1;
     s->thread = std::thread([s] {
+        SetLogThreadName("Server thread");
         try {
             s->server->Run();
         } catch (const std::exception& e) {
@@ -137,7 +138,7 @@ PERLITE_API int perlite_run_async(perlite_server* s) {
             LogError(std::string("server crashed: ") + e.what());
             s->crashed = true;
         } catch (...) {
-            LogError("server crashed");
+            LogError("Server crashed");
             s->crashed = true;
         }
         s->finished = true;

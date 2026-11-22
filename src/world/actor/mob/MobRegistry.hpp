@@ -1,5 +1,6 @@
 #pragma once
 #include "world/actor/mob/MobDef.hpp"
+#include "world/actor/mob/VanillaEntities.hpp"
 
 #include <deque>
 #include <memory>
@@ -25,6 +26,13 @@ namespace perlite {
         MobDef def;
         MobCategory category = MobCategory::Passive;
         std::unique_ptr<MobBehavior> behavior;
+        std::vector<VanillaSize> sizes; // size classes from the behavior pack (slime, magma cube)
+        std::vector<int> variants;      // appearance variants picked at spawn (rabbit coats)
+    };
+
+    // A mob's current hitbox and model scale, from its type, size class and age.
+    struct MobBody {
+        float width = 0.6f, height = 1.8f, scale = 1.0f;
     };
 
     class MobRegistry {
@@ -38,6 +46,9 @@ namespace perlite {
         const MobType* TypeOf(const MobDef* def) const;
         const MobBehavior& BehaviorOf(const MobDef* def) const;
         const std::deque<MobType>& All() const { return types; }
+        // Updates every registered mob from the vanilla behavior pack. Returns how many matched.
+        size_t ApplyVanilla(const VanillaEntities& vanilla);
+        MobBody BodyOf(const Mob& mob) const;
 
     private:
         MobRegistry();

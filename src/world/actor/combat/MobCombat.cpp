@@ -62,6 +62,19 @@ namespace perlite {
         return true;
     }
 
+    void ActorManager::SetSize(Mob& m, int size) {
+        const MobType* type = MobRegistry::Instance().TypeOf(m.def);
+        if (!type || size < 0 || size >= static_cast<int>(type->sizes.size()))
+            return;
+        const VanillaSize& s = type->sizes[static_cast<size_t>(size)];
+        m.size = size;
+        m.variant = s.variant;
+        m.health = m.maxHealth = s.health > 0 ? s.health : m.def->health;
+        m.damage = s.damage;
+        for (Session* viewer : server.PlayersIn(kOverworld))
+            viewer->MobData(m);
+    }
+
     void ActorManager::Die(Mob& m, Session* killer) {
         m.deathTime = 1;
         m.health = 0;
@@ -75,6 +88,19 @@ namespace perlite {
         if (killer && (!killer->InGame() || killer->DimensionId() != kOverworld))
             killer = nullptr;
         server.HookEntityDeath(m, killer);
+        // Slimes and magma cubes split into 2 to 4 of the next size down.
+        if (const MobType* type = MobRegistry::Instance().TypeOf(m.def); type && m.size > 0) {
+            const int smaller = m.size - 1;
+            const int count = 2 + static_cast<int>(rng() % 3);
+            const MobDef* def = m.def;
+            const double x = m.x, y = m.y, z = m.z;
+            const float quarter = type->sizes[static_cast<size_t>(m.size)].width / 4.0f;
+            for (int i = 0; i < count; i++) {
+                const double ox = ((i % 2) - 0.5) * quarter, oz = ((i / 2) - 0.5) * quarter;
+                if (Mob* child = Spawn(def->id, x + ox, y + 0.5, z + oz, m.persistent))
+                    SetSize(*child, smaller);
+            }
+        }
         const bool hostile = (m.def->flags & mobflag::Hostile) != 0;
         const std::string java = LootTables::JavaEntityName(m.def->id);
         const bool zombieLike = java == "zombie" || java == "husk" || java == "drowned" || java == "zombie_villager" ||
@@ -93,7 +119,7 @@ namespace perlite {
             ctx.killedByPlayer = killer != nullptr;
             ctx.onFire = m.burning;
             ctx.baby = m.baby;
-            ctx.cubeSize = java == "magma_cube" ? 2 : 1;
+            ctx.cubeSize = m.variant > 0 && m.size >= 0 ? m.variant : 1; // 1, 2 or 4, as the loot tables expect
             ctx.attackerType = killer ? "minecraft:player" : "";
             if (killer) {
                 const ItemStack& held = killer->LastAttackItem();

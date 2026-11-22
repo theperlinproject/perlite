@@ -335,7 +335,8 @@ namespace {
                     continue;
                 if (text.starts_with("CONNECTRESPONSE 4242 ")) {
                     const std::string sdp = text.substr(21);
-                    CHECK(AnswerIdentityValid(sdp));
+                    // LAN answers carry no identity line, like the offers.
+                    CHECK(!sdp.contains("a=identity"));
                     pc->setRemoteDescription(rtc::Description(sdp, rtc::Description::Type::Answer));
                     answered = true;
                 } else if (text.starts_with("CANDIDATEADD 4242 ") && answered) {

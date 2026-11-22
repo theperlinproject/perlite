@@ -404,7 +404,7 @@ namespace perlite {
                     if (!Batch(positions.subspan(first, n), out.subspan(first, n))) {
 
                         if (!failed.exchange(true))
-                            LogWarn("gpu terrain stopped responding; generating on the cpu from now on");
+                            LogWarn("GPU terrain stopped responding; generating on the cpu from now on");
                         Fallback(positions.subspan(first), out.subspan(first));
                         return;
                     }

@@ -31,13 +31,12 @@ Point `PERLIN_API_SOURCE_DIR` at a local perlin-api checkout to build against it
 
 ## Running
 
-On the first start in a terminal, a short setup wizard asks for the server name, game mode, difficulty, player limit, port, world name and seed, then writes `server.properties` (`--no-wizard` skips it). The file uses the same keys as Bedrock Dedicated Server, plus a few `perlite-*` keys:
+Perlite ships with a commented `server.properties` and reads it as it is: there are no questions on the first start. If the file is missing, the default one is written next to the server. Every setting has a comment above it saying what it does, and `./perlite --print-default-properties` prints the default file. The keys are the usual Bedrock server keys, plus a few `perlite-*` keys:
 
 | Key | Default | |
 |-----|---------|---|
-| `transport` | `nethernet` | Always `nethernet`, the only transport Bedrock 26.60+ clients speak. RakNet was removed; `raknet` and `both` load as `nethernet` with a warning. |
 | `enable-lan-visibility` | `true` | Answer NetherNet LAN discovery on UDP 7551 so the server shows under Friends > LAN Games and can be joined from there. |
-| `network-encryption` | `true` | The encryption handshake on every non-local login. Over NetherNet the handshake is sent but the stream stays plain, as Bedrock Dedicated Server does, since DTLS already encrypts it. |
+| `network-encryption` | `true` | The encryption handshake on every non-local login. Over NetherNet the handshake is sent but the stream stays plain, since DTLS already encrypts it. |
 | `texturepack-required` | `false` | Players must accept the server's packs. |
 | `enable-packet-rate-limiter` | `true` | Drops clients that flood the server with packets. |
 | `perlite-world-storage` | `leveldb` | `leveldb` saves the world in `worlds/<level-name>`; `none` keeps it in memory. |
@@ -53,6 +52,18 @@ Players join with the server's address and `server-port` (19132 by default): the
 Connect to `127.0.0.1` or the machine's LAN address (for example `192.168.1.20`), never `0.0.0.0`: that is a "listen on every interface" address for `server-ip`, not one a client can reach.
 
 The server's NetherNet identity key lives in `nethernet-identity.pem` in the data folder. Keep it: a new key makes every player confirm the server again on their next join.
+
+### Logs
+
+The console and `logs/latest.log` use one line per event, `[HH:MM:SS] [thread/LEVEL]: message`: startup, the spawn area being prepared, players joining and leaving (with their address, entity id and position), commands players run, deaths, saves, and a warning when the server cannot keep up. On the next start the previous `latest.log` is compressed to `logs/YYYY-MM-DD-N.log.gz`. `debug-log-packets=true` adds the packet log.
+
+### Vanilla data
+
+Perlite contains no Mojang assets. On the first start it downloads the `entities` and `shapes` folders of Mojang's vanilla behavior pack from [Mojang/bedrock-samples](https://github.com/Mojang/bedrock-samples) on GitHub into `vanilla_behavior_pack/` in the data folder, and reads that copy afterwards (it downloads again when Perlite moves to a newer game version). Mob collision boxes, scale (adult and baby), size classes, coat variants, health, speed and attack damage come from it, and so do the block shapes sent to players when they join. Without it the server still runs, with built-in mob sizes and full-cube block shapes. `perlite-download-vanilla-pack=false` turns the download off; `PERLITE_VANILLA_PACK=<folder>` points at a copy you already have (a `behavior_pack` folder of bedrock-samples).
+
+### Gameplay
+
+Besides building, combat, mobs, containers, crafting and the commands, the world changes by itself around players: random ticks (the `randomtickspeed` game rule) grow crops, stems, sugar cane, cactus, berries, nether wart, cocoa, kelp and amethyst, turn saplings into trees, spread grass and mycelium, dry and wet farmland, decay leaves that lost their logs, and age copper. Digging in survival shows the crack animation to everyone nearby, and its speed follows the tool, Efficiency, Haste, Mining Fatigue, water and being in the air.
 
 Other files in the data folder: `allowlist.json`, `permissions.json`, `banned-players.json`, `banned-ips.json`, `plugins/`, `resource_packs/` and `behavior_packs/` (folders, `.zip` or `.mcpack`, with an optional `<pack>.key` holding the content key).
 

@@ -387,7 +387,7 @@ namespace perlite {
         for (const fs::path& file : files) {
             std::string error;
             if (!LoadFile(file.string(), error))
-                LogWarn("plugin " + file.filename().string() + " not loaded: " + error);
+                LogWarn("Plugin " + file.filename().string() + " not loaded: " + error);
         }
         DispatchEncoded(abi::Event::ModsLoaded, {});
     }
@@ -438,11 +438,11 @@ namespace perlite {
         raw->info.enabled = true;
         raw->info.arch = raw->instance->Is64() ? "wasm64" : "wasm32";
         raw->apiRevision = mods::ReadApiRevision(*raw->instance);
-        LogInfo("plugin " + raw->info.name + (raw->info.version.empty() ? "" : " " + raw->info.version) +
+        LogInfo("Loading plugin " + raw->info.name + (raw->info.version.empty() ? "" : " " + raw->info.version) +
                 " loaded (" + raw->info.arch + " on " + raw->info.engine + ", api revision " +
                 std::to_string(raw->apiRevision) + ")");
         if (raw->apiRevision > abi::kApiRevision)
-            LogInfo("plugin " + raw->info.name + " is built for a newer api revision than this server provides: newer operations answer UnknownOp");
+            LogWarn("Plugin " + raw->info.name + " is built for a newer api revision than this server provides: newer operations answer UnknownOp");
         plugins.push_back(std::move(plugin));
         uint32_t result = 0;
         CallPlugin(*raw, abi::Event::Load, {}, result);
@@ -517,7 +517,7 @@ namespace perlite {
         }
         p.info.enabled = false;
         p.info.error = error;
-        LogError("plugin " + p.info.name + " disabled after an error: " + error);
+        LogError("Plugin " + p.info.name + " disabled after an error: " + error);
         return false;
     }
 

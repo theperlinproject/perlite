@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <sstream>
 #include <fstream>
 
 namespace perlite {
@@ -240,61 +241,81 @@ namespace perlite {
             return d == 0 ? "peaceful" : d == 2 ? "normal" : d == 3 ? "hard" : "easy";
         }
 
-        struct BdsKey {
+        // Every setting written to server.properties, in order, with the comment written above it.
+        // Keys a file has that are not listed here are read and written back unchanged.
+        struct PropertyKey {
             const char* key;
             const char* fallback;
+            const char* comment;
         };
-        constexpr BdsKey kBdsKeys[] = {
-            {"server-name", "Dedicated Server"},
-            {"gamemode", "survival"},
-            {"force-gamemode", "false"},
-            {"difficulty", "easy"},
-            {"allow-cheats", "false"},
-            {"max-players", "10"},
-            {"online-mode", "true"},
-            {"allow-list", "true"},
-            {"server-port", "19132"},
-            {"server-portv6", "19133"},
-            {"server-ip", ""},
-            {"server-udp-ports", "19132"},
-            {"transport", "nethernet"},
-            {"enable-lan-visibility", "true"},
-            {"view-distance", "32"},
-            {"tick-distance", "4"},
-            {"persistent-ticking-area-max-count", "10"},
-            {"persistent-ticking-area-max-chunks", "100"},
-            {"transient-ticking-area-max-chunks", "300"},
-            {"player-idle-timeout", "30"},
-            {"max-threads", "8"},
-            {"level-name", "Bedrock level"},
-            {"level-seed", ""},
-            {"default-player-permission-level", "member"},
-            {"texturepack-required", "false"},
-            {"content-log-file-enabled", "false"},
-            {"content-log-console-output-enabled", "false"},
-            {"content-log-level", "info"},
-            {"compression-threshold", "1"},
-            {"compression-algorithm", "zlib"},
-            {"server-authoritative-movement-strict", "false"},
-            {"server-authoritative-dismount-strict", "false"},
-            {"server-authoritative-entity-interactions-strict", "false"},
-            {"server-authoritative-entity-attack-request-validation", "disabled"},
-            {"server-authoritative-entity-attack-range-validation", "disabled"},
-            {"server-authoritative-entity-attack-range-tolerance", "0.5"},
-            {"player-position-acceptance-threshold", "0.5"},
-            {"player-movement-action-direction-threshold", "0.85"},
-            {"server-authoritative-block-breaking-pick-range-scalar", "1.5"},
-            {"chat-restriction", "None"},
-            {"disable-player-interaction", "false"},
-            {"client-side-chunk-generation-enabled", "true"},
-            {"block-network-ids-are-hashes", "true"},
-            {"disable-persona", "false"},
-            {"disable-custom-skins", "false"},
-            {"server-build-radius-ratio", "Disabled"},
-            {"enable-packet-rate-limiter", "true"},
-            {"allow-outbound-script-debugging", "false"},
-            {"allow-inbound-script-debugging", "false"},
-            {"script-debugger-auto-attach", "disabled"},
+        constexpr PropertyKey kPropertyKeys[] = {
+            {"server-name", "Perlite Server",
+             "Name shown in the server list and the LAN list. Any text without ';'."},
+            {"gamemode", "survival", "Game mode for new players: survival, creative or adventure."},
+            {"force-gamemode", "false",
+             "true: players get gamemode above on every join. false: each player keeps their own game mode."},
+            {"difficulty", "easy", "World difficulty: peaceful, easy, normal or hard."},
+            {"allow-cheats", "false", "true lets players with permission run commands like /give and /tp."},
+            {"max-players", "20", "Most players online at once."},
+            {"online-mode", "false",
+             "true: every player must be signed in to Xbox Live. Turn it on for servers open to the internet."},
+            {"allow-list", "false", "true: only players listed in allowlist.json can join (manage it with /allowlist)."},
+            {"server-ip", "", "Address to listen on. Empty listens on every network interface."},
+            {"server-port", "19132",
+             "Port players join on. Open it for TCP (the join request) and UDP (gameplay) in your firewall."},
+            {"server-udp-ports", "19132",
+             "UDP port(s) for gameplay traffic: a port, or a first-last range, or public:local."},
+            {"enable-lan-visibility", "true",
+             "Show the server under Friends > LAN Games (UDP 7551 on the local network)."},
+            {"view-distance", "12", "Farthest chunk distance sent to players."},
+            {"tick-distance", "4", "Chunk distance around players where blocks and mobs are ticked (4 to 12)."},
+            {"player-idle-timeout", "30", "Minutes before an idle player is kicked. 0 never kicks."},
+            {"max-threads", "8", "Threads for world generation and saving. 0 uses every core."},
+            {"level-name", "world", "Name of the world folder under worlds/."},
+            {"level-seed", "", "Seed for a new world: a number or any text. Empty picks a random seed."},
+            {"default-player-permission-level", "member",
+             "Permission for players not listed in permissions.json: visitor, member or operator."},
+            {"texturepack-required", "false", "true: players must accept the server's resource packs to join."},
+            {"chat-restriction", "None",
+             "None, Dropped (chat is hidden) or Disabled (the chat button is off)."},
+            {"compression-threshold", "1", "Smallest packet size in bytes that is compressed (0 to 65535)."},
+            {"compression-algorithm", "zlib", "Packet compression: zlib or snappy."},
+            {"client-side-chunk-generation-enabled", "true",
+             "true lets clients generate far-away terrain themselves to see beyond view-distance."},
+            {"block-network-ids-are-hashes", "true", "Send block ids as hashes, as current clients expect."},
+            {"disable-persona", "false", "true: persona (character creator) skins are not shown to other players."},
+            {"disable-custom-skins", "false", "true: custom skins are replaced with the default skins."},
+            {"enable-packet-rate-limiter", "true", "Disconnect players who flood the server with packets."},
+            {"network-encryption", "true",
+             "Encrypt connections. Over NetherNet the handshake runs but DTLS already encrypts the stream."},
+            {"debug-log-packets", "false", "Log every packet sent and received while a player is joining."},
+            {"perlite-world-storage", "leveldb",
+             "leveldb saves the world in worlds/<level-name>; none keeps it in memory only."},
+            {"perlite-autosave-seconds", "300", "Seconds between automatic saves. 0 saves only on stop and /save."},
+            {"perlite-download-vanilla-pack", "true",
+             "Download Mojang's vanilla behavior pack (mob sizes, block shapes) from bedrock-samples on GitHub."},
+            {"perlite-generator", "vanilla", "Terrain for new chunks: vanilla or flat."},
+            {"perlite-terrain-backend", "auto", "Where terrain is generated: cpu, gpu or auto."},
+            {"perlite-flat-layers", "minecraft:bedrock*1,minecraft:dirt*2,minecraft:grass_block*1",
+             "Layers of a flat world, bottom up: block*count separated by commas."},
+            {"perlite-plugin-dir", "", "Folder with plugins. Empty uses plugins/ in the data folder."},
+            {"perlite-block-data-dir", "", "Folder with block data. Empty uses the data folder beside the program."},
+            {"perlite-ice-servers", "", "STUN/TURN servers for NetherNet, comma separated. Usually left empty."},
+            {"perlite-ice-bind-address", "", "Address NetherNet gameplay traffic is bound to. Empty uses all."},
+            {"perlite-auth-root-keys", "", "Extra trusted Xbox Live root keys, comma separated. Usually left empty."},
+        };
+
+        // Accepted when reading older files, but not written back: they do nothing here.
+        constexpr const char* kRetiredKeys[] = {
+            "transport", "server-portv6", "persistent-ticking-area-max-count", "persistent-ticking-area-max-chunks",
+            "transient-ticking-area-max-chunks", "content-log-file-enabled", "content-log-console-output-enabled",
+            "content-log-level", "server-authoritative-movement-strict", "server-authoritative-dismount-strict",
+            "server-authoritative-entity-interactions-strict", "server-authoritative-entity-attack-request-validation",
+            "server-authoritative-entity-attack-range-validation", "server-authoritative-entity-attack-range-tolerance",
+            "player-position-acceptance-threshold", "player-movement-action-direction-threshold",
+            "server-authoritative-block-breaking-pick-range-scalar", "disable-player-interaction",
+            "server-build-radius-ratio", "allow-outbound-script-debugging", "allow-inbound-script-debugging",
+            "script-debugger-auto-attach", "emit-server-telemetry", "debug-skip-packets",
         };
 
         std::string JoinList(const std::vector<std::string>& v) {
@@ -433,7 +454,7 @@ namespace perlite {
             if (ParseUdpPorts(v, trial))
                 *this = std::move(trial);
             else
-                bad("a port, a first-last range, or public:local (see the bds how-to)");
+                bad("a port, a first-last range, or public:local");
             return true;
         }
         if (key == "transport") {
@@ -524,6 +545,8 @@ namespace perlite {
         }
         if (key == "perlite-autosave-seconds")
             return number(autosaveSeconds, 0, 86400);
+        if (key == "perlite-download-vanilla-pack")
+            return boolean(downloadVanillaPack);
         if (key == "chat-restriction") {
             if (lower == "none")
                 chatRestriction = "None";
@@ -637,6 +660,19 @@ namespace perlite {
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
         if (!out)
             return false;
+        out << PropertiesText();
+        return out.good();
+    }
+
+    ServerConfig ServerConfig::FirstRun() {
+        ServerConfig c;
+        c.randomSeed = true;
+        c.udpPortsSet = true;
+        c.udpPortBegin = c.udpPortEnd = c.port;
+        return c;
+    }
+
+    std::string ServerConfig::PropertiesText() const {
         const auto current = [&](const std::string& key, std::string& value) {
             if (key == "server-name")
                 value = name;
@@ -656,14 +692,10 @@ namespace perlite {
                 value = Bool(whitelist);
             else if (key == "server-port")
                 value = std::to_string(port);
-            else if (key == "server-portv6")
-                value = std::to_string(portV6);
             else if (key == "server-ip")
                 value = bindAddress == "0.0.0.0" ? "" : bindAddress;
             else if (key == "server-udp-ports")
-                value = UdpPortsText(*this);
-            else if (key == "transport")
-                value = transport;
+                value = udpPortsSet ? UdpPortsText(*this) : std::to_string(port);
             else if (key == "enable-lan-visibility")
                 value = Bool(lanDiscovery);
             else if (key == "view-distance")
@@ -678,7 +710,8 @@ namespace perlite {
                 value = levelName;
             else if (key == "level-seed")
                 value = randomSeed ? std::string()
-                                   : (levelSeedText.empty() ? std::to_string(static_cast<int64_t>(seed))
+                                   : (levelSeedText.empty() ? (seed ? std::to_string(static_cast<int64_t>(seed))
+                                                                    : std::string())
                                                             : levelSeedText);
             else if (key == "default-player-permission-level")
                 value = defaultPermission;
@@ -700,36 +733,61 @@ namespace perlite {
                 value = Bool(texturepackRequired);
             else if (key == "chat-restriction")
                 value = chatRestriction;
+            else if (key == "network-encryption")
+                value = Bool(networkEncryption);
+            else if (key == "debug-log-packets")
+                value = Bool(debugLogPackets);
+            else if (key == "perlite-world-storage")
+                value = worldStorage;
+            else if (key == "perlite-autosave-seconds")
+                value = std::to_string(autosaveSeconds);
+            else if (key == "perlite-download-vanilla-pack")
+                value = Bool(downloadVanillaPack);
+            else if (key == "perlite-generator")
+                value = generator;
+            else if (key == "perlite-terrain-backend")
+                value = terrainBackend;
+            else if (key == "perlite-flat-layers")
+                value = FlatLayersText(flatLayers);
+            else if (key == "perlite-plugin-dir")
+                value = pluginDir;
+            else if (key == "perlite-block-data-dir")
+                value = blockDataDir;
+            else if (key == "perlite-ice-servers")
+                value = JoinList(iceServers);
+            else if (key == "perlite-ice-bind-address")
+                value = iceBindAddress;
+            else if (key == "perlite-auth-root-keys")
+                value = JoinList(authRootKeys);
             else
                 return false;
             return true;
         };
+        std::ostringstream out;
+        out << "# Perlite server settings. Lines starting with # are comments; edit a value, then restart.\n";
         std::vector<std::string> written;
-        for (const BdsKey& k : kBdsKeys) {
+        for (const PropertyKey& k : kPropertyKeys) {
             std::string value = k.fallback;
             if (!current(k.key, value))
                 for (const auto& [ek, ev] : extraProperties)
                     if (ek == k.key)
                         value = ev;
-            out << k.key << "=" << value << "\n\n";
+            out << "# " << k.comment << "\n" << k.key << "=" << value << "\n";
             written.push_back(k.key);
         }
-        out << "# perlite additions: the terrain generator (flat or vanilla), gpu or cpu terrain, plugin and "
-               "block data folders\n";
-        out << "network-encryption=" << Bool(networkEncryption) << "\n";
-        out << "perlite-world-storage=" << worldStorage << "\n";
-        out << "perlite-autosave-seconds=" << autosaveSeconds << "\n";
-        out << "perlite-generator=" << generator << "\n";
-        out << "perlite-terrain-backend=" << terrainBackend << "\n";
-        out << "perlite-plugin-dir=" << pluginDir << "\n";
-        out << "perlite-block-data-dir=" << blockDataDir << "\n";
-        out << "perlite-flat-layers=" << FlatLayersText(flatLayers) << "\n";
-        out << "perlite-ice-servers=" << JoinList(iceServers) << "\n";
-        out << "perlite-ice-bind-address=" << iceBindAddress << "\n";
-        out << "perlite-auth-root-keys=" << JoinList(authRootKeys) << "\n";
-        for (const auto& [ek, ev] : extraProperties)
-            if (std::ranges::find(written, ek) == written.end())
-                out << ek << "=" << ev << "\n";
-        return out.good();
+        bool header = false;
+        for (const auto& [ek, ev] : extraProperties) {
+            if (std::ranges::find(written, ek) != written.end() ||
+                std::ranges::find(kRetiredKeys, ek, [](const char* r) { return std::string(r); }) !=
+                    std::end(kRetiredKeys))
+                continue;
+            if (!header) {
+                out << "# Other settings (kept from this file).\n";
+                header = true;
+            }
+            out << ek << "=" << ev << "\n";
+            written.push_back(ek);
+        }
+        return out.str();
     }
 }

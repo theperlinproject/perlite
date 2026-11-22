@@ -55,6 +55,7 @@ include(PerliteBedrockData)
 set(PERLITE_SOURCES
     src/common/Json.cpp
     src/common/Log.cpp
+    src/common/Https.cpp
     src/common/ModSocket.cpp
     src/common/WebSocket.cpp
     src/embed/CApi.cpp
@@ -71,6 +72,7 @@ set(PERLITE_SOURCES
     src/network/session/InventoryHandler.cpp
     src/network/session/LoginHandler.cpp
     src/network/session/MovementHandler.cpp
+    src/network/session/BlockBreaking.cpp
     src/network/session/PlayerData.cpp
     src/network/session/PlayerState.cpp
     src/network/session/Session.cpp
@@ -80,6 +82,8 @@ set(PERLITE_SOURCES
     src/plugin/PluginHost.cpp
     src/server/Config.cpp
     src/server/Server.cpp
+    src/server/RandomTicks.cpp
+    src/server/VanillaPack.cpp
     src/server/ServerData.cpp
     src/server/vanilla/BedrockData.cpp
     src/server/ServerStorage.cpp
@@ -104,6 +108,8 @@ set(PERLITE_SOURCES
     src/world/actor/misc/FallingBlock.cpp
     src/world/actor/misc/PrimedTnt.cpp
     src/world/actor/mob/MobRegistry.cpp
+    src/world/actor/mob/VanillaEntities.cpp
+    src/world/level/block/VoxelShapes.cpp
     src/world/actor/mob/VanillaMobs.cpp
     src/world/actor/projectile/Arrow.cpp
     src/world/actor/spawn/NaturalSpawner.cpp
@@ -237,13 +243,18 @@ if(PERLITE_BUILD_SHARED)
 endif()
 
 if(PERLITE_BUILD_EXE)
-    add_executable(perlite src/main/Main.cpp src/main/SetupWizard.cpp)
+    add_executable(perlite src/main/Main.cpp)
     target_include_directories(perlite PRIVATE src include ${PERLIN_API_INCLUDE_DIRS})
     target_link_libraries(perlite PRIVATE perlite_core perlite_protocol Threads::Threads)
     if(UNIX AND NOT APPLE)
         target_link_options(perlite PRIVATE $<$<CONFIG:Release>:-s>)
     endif()
+    # Ship the commented default settings next to the program.
+    add_custom_command(TARGET perlite POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/server.properties"
+                "$<TARGET_FILE_DIR:perlite>/server.properties")
     install(TARGETS perlite RUNTIME DESTINATION .)
+    install(FILES server.properties DESTINATION .)
     install(DIRECTORY data/ DESTINATION data)
     install(DIRECTORY "${PERLITE_BEDROCK_DIR}/" DESTINATION data/bedrock)
 endif()

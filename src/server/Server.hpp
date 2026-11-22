@@ -107,7 +107,11 @@ namespace perlite {
         double SpawnZ() const { return static_cast<double>(spawnZ); }
         void SetWorldSpawn(int x, int y, int z);
 
-        void SaveWorld();
+        // announce: log Java's "Saving chunks for level ..." lines (stop and save commands).
+        // Autosaves only log at debug level.
+        void SaveWorld(bool announce = false);
+        // Warns, at most every 15 seconds, when the tick loop has fallen behind.
+        void NoteLag(std::chrono::milliseconds behind);
         void LoadPlayer(Session& session);
         void SavePlayer(Session& session);
         bool HasStorage() const { return storage != nullptr; }
@@ -118,6 +122,8 @@ namespace perlite {
         bool Raining() const { return raining; }
         bool Thundering() const { return thundering; }
         void SendWorldState(Session& to);
+        // Generates (or loads) the chunks around spawn before players arrive, logging progress.
+        void PrepareSpawnArea();
 
         struct GameRule {
             std::string display;
@@ -332,6 +338,11 @@ namespace perlite {
         std::vector<PortalFrame> portals;
         void TickPortals();
         void TickGravity();
+        // Random block ticks around players: crops, saplings, grass, leaves and the rest of the
+        // blocks that change by themselves over time.
+        void TickRandom();
+        void RandomTickBlock(int dimension, int x, int y, int z, std::mt19937& rng);
+        bool GrowTree(int dimension, int x, int y, int z, const std::string& kind, std::mt19937& rng);
         std::vector<std::array<int, 4>> gravityQueue;
         void TravelThroughPortal(Session& who, bool endPortal);
         void BuildEndPlatform();

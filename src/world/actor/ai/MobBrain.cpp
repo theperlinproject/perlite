@@ -75,9 +75,11 @@ namespace perlite {
                 m.goalY = target->Y();
                 m.hasGoal = true;
                 m.goalTicks = 20;
-                const double reach = d.width * 2.0 * 0.5 + 0.9;
-                if (dist < reach + 0.5 && std::abs(dy) < 2.0 && m.attackCooldown <= 0 && d.damage > 0) {
-                    float damage = d.damage;
+                const MobBody body = MobRegistry::Instance().BodyOf(m);
+                const double reach = body.width * 2.0 * 0.5 + 0.9;
+                const float baseDamage = m.damage >= 0 ? m.damage : d.damage;
+                if (dist < reach + 0.5 && std::abs(dy) < 2.0 && m.attackCooldown <= 0 && baseDamage > 0) {
+                    float damage = baseDamage;
                     if (server.Config().difficulty == 1)
                         damage = std::min(damage / 2.0f + 1.0f, damage);
                     else if (server.Config().difficulty == 3)

@@ -17,8 +17,9 @@ namespace perlite {
     }
 
     bool ActorManager::Collides(const Mob& m, double x, double y, double z) const {
-        const double hw = m.def->width * (m.baby ? 0.25 : 0.5) - 0.001;
-        const double h = m.def->height * (m.baby ? 0.5 : 1.0) - 0.001;
+        const MobBody body = MobRegistry::Instance().BodyOf(m);
+        const double hw = body.width * 0.5 - 0.001;
+        const double h = body.height - 0.001;
         for (int bx = static_cast<int>(std::floor(x - hw)); bx <= static_cast<int>(std::floor(x + hw)); bx++)
             for (int bz = static_cast<int>(std::floor(z - hw)); bz <= static_cast<int>(std::floor(z + hw)); bz++)
                 for (int by = static_cast<int>(std::floor(y)); by <= static_cast<int>(std::floor(y + h)); by++)
@@ -84,6 +85,21 @@ namespace perlite {
         m.y = y;
         m.z = z;
         m.health = m.def->health;
+        if (const MobType* type = MobRegistry::Instance().TypeOf(m.def)) {
+            // Size classes (slime, magma cube): small, medium or large, each with its own box, health
+            // and damage; the client draws the size from the variant.
+            if (!type->sizes.empty()) {
+                m.size = static_cast<int>(rng() % type->sizes.size());
+                const VanillaSize& s = type->sizes[static_cast<size_t>(m.size)];
+                m.variant = s.variant;
+                if (s.health > 0)
+                    m.health = s.health;
+                m.damage = s.damage;
+            } else if (!type->variants.empty()) {
+                m.variant = type->variants[rng() % type->variants.size()];
+            }
+        }
+        m.maxHealth = m.health;
         m.persistent = persistent;
         m.yaw = m.headYaw = static_cast<float>(rng() % 360);
         mobs.push_back(m);

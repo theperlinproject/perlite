@@ -74,11 +74,16 @@ namespace perlite {
         bool encryptLocal = false;
         std::string worldStorage = "leveldb";
         uint32_t autosaveSeconds = 300;
+        bool downloadVanillaPack = true;
         std::vector<std::pair<std::string, std::string>> extraProperties;
 
         static ServerConfig LoadDirectory(const std::string& dir, std::string* error = nullptr);
         static ServerConfig LoadProperties(const std::string& path, std::string* error = nullptr);
         bool SaveProperties(const std::string& path) const;
+        // The server.properties text for this configuration (what SaveProperties writes).
+        std::string PropertiesText() const;
+        // The settings a brand-new server starts with; the shipped server.properties is these.
+        static ServerConfig FirstRun();
         bool SetProperty(const std::string& key, const std::string& value, std::string* warning = nullptr);
         static uint64_t SeedFromText(const std::string& text);
 

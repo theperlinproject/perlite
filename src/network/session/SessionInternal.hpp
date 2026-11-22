@@ -9,6 +9,8 @@
 #include "world/crafting/Recipes.hpp"
 #include "world/level/block/BlockCatalog.hpp"
 #include "world/level/block/Blocks.hpp"
+#include "world/actor/ActorManager.hpp"
+#include "world/actor/mob/MobRegistry.hpp"
 #include "protocol/Packets.hpp"
 #include "common/Strings.hpp"
 #include <algorithm>
@@ -310,10 +312,12 @@ namespace perlite {
             flags.legacyType = static_cast<uint8_t>(flags.type); // DataItem Type byte, = index
             flags.value.template emplace<1>(static_cast<int64_t>(ActorManager::Flags(mob)));
             out.push_back(flags);
-            const float scale = mob.baby ? 0.5f : 1.0f;
-            out.push_back(FloatEntry(proto::MetadataDictionaryEntryKey::Scale, scale));
-            out.push_back(FloatEntry(proto::MetadataDictionaryEntryKey::BoundingboxWidth, mob.def->width * scale));
-            out.push_back(FloatEntry(proto::MetadataDictionaryEntryKey::BoundingboxHeight, mob.def->height * scale));
+            const MobBody body = MobRegistry::Instance().BodyOf(mob);
+            out.push_back(FloatEntry(proto::MetadataDictionaryEntryKey::Scale, body.scale));
+            out.push_back(FloatEntry(proto::MetadataDictionaryEntryKey::BoundingboxWidth, body.width));
+            out.push_back(FloatEntry(proto::MetadataDictionaryEntryKey::BoundingboxHeight, body.height));
+            if (mob.variant >= 0)
+                out.push_back(IntEntry(proto::MetadataDictionaryEntryKey::Variant, mob.variant));
             return out;
         }
 

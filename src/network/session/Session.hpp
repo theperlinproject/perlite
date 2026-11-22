@@ -62,6 +62,8 @@ namespace perlite {
 
         uint64_t Id() const { return runtimeId; }
         const std::string& Name() const { return name; }
+        // Why the player went: "Disconnected", "Timed out", or a kick message. Logged on leave.
+        const std::string& LeaveReason() const { return leaveReason; }
         const std::string& Xuid() const { return xuid; }
         State GetState() const { return state; }
         bool InGame() const { return state == State::InGame; }
@@ -250,6 +252,12 @@ namespace perlite {
         void SendStartGame();
         void SurvivalTick();
         void MovementTick(const proto2225::PlayerAuthInputPacket& in, double previousY);
+        void HandleBlockActions(const proto2225::PlayerAuthInputPacket& in);
+        void StartBreaking(int x, int y, int z, int face);
+        void StopBreaking();
+        void BreakingTick();
+        double BreakProgressPerTick(const std::string& block) const;
+        void BroadcastBreakEvent(int event, int x, int y, int z, int data) const;
         void FoodTick();
         void EffectTick();
         void EnvironmentTick();
@@ -283,6 +291,7 @@ namespace perlite {
 
         uint64_t runtimeId;
         std::string name, xuid;
+        std::string leaveReason = "Disconnected";
         // BuildPlatform from the client's DeviceOS; 0 is not a valid value, -1 means Unknown.
         int32_t buildPlatform = -1;
         std::array<uint8_t, 16> uuid{};
@@ -359,8 +368,15 @@ namespace perlite {
         int rateCount = 0;
         int rateStrikes = 0;
         double lastHookX = 0, lastHookY = 0, lastHookZ = 0;
+        struct BreakProgress {
+            bool active = false;
+            int x = 0, y = 0, z = 0;
+            double speed = 0;
+            double progress = 0;
+        } breaking;
 
         double posX = 0.5, posY = 0, posZ = 0.5;
+        uint64_t inputTick = 0;
         int dimension = kOverworld;
         bool awaitingDimensionAck = false;
         std::chrono::steady_clock::time_point dimensionChangedAt;

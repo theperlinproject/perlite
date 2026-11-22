@@ -36,7 +36,7 @@ namespace perlite {
                 }
                 if (action == "hold") {
                     savingHeld = true;
-                    SaveWorld();
+                    SaveWorld(true);
                     say(c.source, "Saving... the world is ready to be copied; run /save resume when done");
                 } else if (action == "resume") {
                     savingHeld = false;
@@ -45,7 +45,7 @@ namespace perlite {
                     say(c.source, savingHeld ? "Data saved. Files are now ready to be copied."
                                              : "A previous save has not been held; run /save hold first");
                 } else {
-                    SaveWorld();
+                    SaveWorld(true);
                     say(c.source, "Saved the world");
                 }
             });
@@ -54,7 +54,7 @@ namespace perlite {
                 fail(c.source, "World saving is off (perlite-world-storage=none)");
                 return;
             }
-            SaveWorld();
+            SaveWorld(true);
             say(c.source, "Saved the world");
         });
 

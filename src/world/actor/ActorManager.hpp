@@ -58,6 +58,10 @@ namespace perlite {
         int lastAttackerTicks = 0;
         float lastX = 0, lastY = 0, lastZ = 0, lastYaw = 0, lastHead = 0;
         uint64_t lastFlags = 0;
+        int size = -1;    // index into the type's size classes (slime, magma cube); -1 when it has none
+        int variant = -1; // the "variant" sent to clients (slime size, rabbit coat); -1 sends none
+        float maxHealth = 0;  // 0: the type's health
+        float damage = -1;    // attack damage for this mob's size; -1: the type's damage
     };
 
     class ActorManager {
@@ -70,6 +74,8 @@ namespace perlite {
         Mob* SpawnPrimedTnt(double x, double y, double z, int fuse);
         void Explosion(double x, double y, double z, float power, uint64_t source, bool breakBlocks = true);
         bool Kill(uint64_t id);
+        // Puts a slime or magma cube in a size class (index into its type's sizes) and redraws it.
+        void SetSize(Mob& m, int size);
         bool Remove(uint64_t id);
         bool Damage(uint64_t id, float amount);
         void Moved(Mob& m);

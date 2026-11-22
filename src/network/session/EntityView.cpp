@@ -47,7 +47,7 @@ namespace perlite {
         hp.name = "minecraft:health";
         hp.min = 0;
         hp.value = mob.health;
-        hp.max = mob.def->health;
+        hp.max = mob.maxHealth > 0 ? mob.maxHealth : mob.def->health;
         p.attributes.push_back(hp);
         proto::EntityAttributesEntry move;
         move.name = "minecraft:movement";
