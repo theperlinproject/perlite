@@ -18,8 +18,9 @@ namespace perlite {
         Send(p);
     }
 
+    // The action bar line, as /title @s actionbar sends it.
     void Session::SendActionBar(const std::string& text) {
-        SendText(static_cast<uint8_t>(proto::TextPacketType::JukeboxPopup), {}, text);
+        SendTitle(4, text, 0, 40, 10);
     }
 
     void Session::SendRaw(const std::string& message) {

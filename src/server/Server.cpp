@@ -1,4 +1,5 @@
 #include "server/Server.hpp"
+#include "common/ParallelFor.hpp"
 #include "world/level/block/Waterlog.hpp"
 #include "world/actor/mob/MobRegistry.hpp"
 #include "world/actor/mob/VanillaEntities.hpp"
@@ -440,6 +441,8 @@ namespace perlite {
             TickGravity();
             TickFire();
             sections.Mark("blocks");
+            TickFluids();
+            sections.Mark("fluids");
             TickRandom();
             sections.Mark("random ticks");
             plugins->Pump();
@@ -458,6 +461,8 @@ namespace perlite {
                     if (other != s && other->DimensionId() == s->DimensionId())
                         other->SendMove(*s, 0);
         sections.Mark("movement");
+        FlushBlockUpdates();
+        sections.Mark("block updates");
         // Chunk sending gets a share of the tick; the session that goes first changes every tick so
         // none is always last when the time runs out.
         chunkSendDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(15);
@@ -696,9 +701,21 @@ namespace perlite {
                 itemEntities.erase(itemEntities.begin() + static_cast<std::ptrdiff_t>(i));
                 continue;
             }
-            if (std::abs(it.x - ox) + std::abs(it.y - oy) + std::abs(it.z - oz) > 0.001)
+            // Items fly on the client from their motion: the position is corrected every few ticks
+            // and when the item comes to rest.
+            const bool movedNow = std::abs(it.x - ox) + std::abs(it.y - oy) + std::abs(it.z - oz) > 0.001;
+            if (movedNow) {
+                it.unsent = true;
+                if ((it.age + static_cast<int>(it.id)) % 5 == 0) {
+                    for (Session* s : players)
+                        s->MoveItem(it);
+                    it.unsent = false;
+                }
+            } else if (it.unsent) {
                 for (Session* s : players)
                     s->MoveItem(it);
+                it.unsent = false;
+            }
             bool gone = false;
             if (it.age >= it.pickupDelay)
                 for (Session* s : players) {
@@ -1103,16 +1120,80 @@ namespace perlite {
             gravityQueue.push_back({x, y, z, due});
             gravityQueue.push_back({x, y + 1, z, due});
         }
-        const int32_t hash = BlockRegistry::Instance().Hash(block);
-        for (Session* s : PlayersIn(dimension))
-            if (s->HasSent({x >> 4, z >> 4})) {
-                s->SendBlockUpdate(x, y, z, hash);
-                if (liquidChange >= 0)
-                    s->SendBlockUpdate(x, y, z, BlockRegistry::Instance().Hash(static_cast<uint16_t>(liquidChange)), 1);
-            }
+        // Clients hear of the change at the end of the tick, all of a chunk's changes together.
+        QueueBlockUpdate(dimension, x, y, z, block, 0);
+        if (liquidChange >= 0)
+            QueueBlockUpdate(dimension, x, y, z, static_cast<uint16_t>(liquidChange), 1);
+        FluidNeighbourChanged(dimension, x, y, z);
         if (listens)
             plugins->Dispatch<abi::Event::BlockChanged>(
                 {.x = x, .y = y, .z = z, .from = before, .to = BlockRegistry::Instance().Name(block)});
+    }
+
+    void Server::QueueBlockUpdate(int dimension, int x, int y, int z, uint16_t block, int layer) {
+        const uint64_t chunk = (static_cast<uint64_t>(dimension & 3) << 62) |
+                               (static_cast<uint64_t>(static_cast<uint32_t>(x >> 4) & 0x7FFFFFFF) << 31) |
+                               static_cast<uint64_t>(static_cast<uint32_t>(z >> 4) & 0x7FFFFFFF);
+        auto& list = pendingBlocks[chunk];
+        list.dimension = dimension;
+        list.chunk = {x >> 4, z >> 4};
+        list.changes[{x, y, z, layer}] = block;
+    }
+
+    // Sends the tick's block changes: each changed block on its own, or the whole chunk again when
+    // much of it changed (one shared, compressed packet instead of hundreds per player).
+    void Server::FlushBlockUpdates() {
+        if (pendingBlocks.empty())
+            return;
+        std::array<std::vector<Session*>, kDimensionCount> players;
+        for (int d = 0; d < kDimensionCount; d++)
+            players[static_cast<size_t>(d)] = PlayersIn(d);
+        // Sending a chunk again costs about as much as 1500 single block updates (it is compressed
+        // once and shared); single updates cost per player. Whichever is cheaper is used.
+        const auto resendWorth = [&](const PendingChunkBlocks& pending) {
+            const size_t viewers = players[static_cast<size_t>(std::clamp(pending.dimension, 0, kDimensionCount - 1))].size();
+            return pending.changes.size() >= 64 && pending.changes.size() * std::max<size_t>(1, viewers) >= 1500;
+        };
+        // Chunks to send again are encoded and compressed in parallel first.
+        {
+            std::vector<std::pair<Session*, std::pair<std::shared_ptr<ChunkEntry>, ChunkPos>>> prepare;
+            for (auto& [key, pending] : pendingBlocks) {
+                if (!resendWorth(pending))
+                    continue;
+                ChunkManager* world = LoadedWorld(pending.dimension);
+                auto entry = world ? world->Peek(pending.chunk) : nullptr;
+                if (!entry)
+                    continue;
+                for (Session* s : players[static_cast<size_t>(std::clamp(pending.dimension, 0, kDimensionCount - 1))])
+                    if (s->HasSent(pending.chunk)) {
+                        prepare.push_back({s, {entry, pending.chunk}});
+                        break;
+                    }
+            }
+            ParallelPool::Instance().For(prepare.size(), [&](size_t i) {
+                prepare[i].first->PrepareChunk(*prepare[i].second.first, prepare[i].second.second);
+            });
+        }
+        for (auto& [key, pending] : pendingBlocks) {
+            const auto& viewers = players[static_cast<size_t>(std::clamp(pending.dimension, 0, kDimensionCount - 1))];
+            if (viewers.empty())
+                continue;
+            ChunkManager* world = LoadedWorld(pending.dimension);
+            const std::shared_ptr<ChunkEntry> entry = world ? world->Peek(pending.chunk) : nullptr;
+            const bool resend = entry && resendWorth(pending);
+            for (Session* s : viewers) {
+                if (!s->HasSent(pending.chunk))
+                    continue;
+                if (resend) {
+                    s->ResendChunk(*entry, pending.chunk);
+                    continue;
+                }
+                for (const auto& [at, block] : pending.changes)
+                    s->SendBlockUpdate(at[0], at[1], at[2], BlockRegistry::Instance().Hash(block),
+                                       static_cast<uint32_t>(at[3]));
+            }
+        }
+        pendingBlocks.clear();
     }
 
     void Server::TickGravity() {
@@ -1194,6 +1275,16 @@ namespace perlite {
                           held.Enchant(16));
         }
         ApplyBlock(dim, x, y, z, BlockRegistry::kAir);
+        // Everyone sees the block crumble and hears it, the breaker too (in creative the client
+        // shows nothing of its own).
+        {
+            const int32_t hash = BlockRegistry::Instance().Hash(current);
+            for (Session* s : PlayersIn(dim)) {
+                s->SendLevelEvent(2001, x + 0.5, y + 0.5, z + 0.5, hash);
+                if (s != &by || by.Creative())
+                    s->PlaySound("BreakBlock", x + 0.5, y + 0.5, z + 0.5, hash);
+            }
+        }
         BreakPartner(dim, x, y, z, current);
         OnBlockRemoved(by, dim, x, y, z, name);
         if (!by.Creative())

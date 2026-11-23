@@ -43,10 +43,11 @@ int main() {
     if (backend->Decorates()) {
         for (int x = -1; x <= 1; x++)
             for (int z = -1; z <= 1; z++) {
-                const ChunkColumn* region[9];
-                for (int dz = -1; dz <= 1; dz++)
-                    for (int dx = -1; dx <= 1; dx++)
-                        region[(dz + 1) * 3 + (dx + 1)] = &cols[static_cast<size_t>((x + dx + 2) * 5 + (z + dz + 2))];
+                const ChunkColumn* region[kDecorationArea] = {};
+                for (int dz = -kDecorationReach; dz <= kDecorationReach; dz++)
+                    for (int dx = -kDecorationReach; dx <= kDecorationReach; dx++)
+                        if (std::abs(x + dx) <= 2 && std::abs(z + dz) <= 2)
+                            region[DecorationSlot(dx, dz)] = &cols[static_cast<size_t>((x + dx + 2) * 5 + (z + dz + 2))];
                 ChunkColumn out = cols[static_cast<size_t>((x + 2) * 5 + (z + 2))].Clone();
                 backend->Decorate({x, z}, region, out);
                 decorated.push_back(std::move(out));

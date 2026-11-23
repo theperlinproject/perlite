@@ -30,7 +30,7 @@ namespace perlite {
             m.vz = spread(rng) * 2.0;
             m.health = 1;
             m.persistent = true;
-            mobs.push_back(m);
+            Add(m);
             Mob& added = mobs.back();
             for (Session* s : server.PlayersIn(kOverworld)) {
                 s->ShowMob(added);

@@ -84,7 +84,7 @@ namespace perlite {
             bool HasBiomes() const override { return true; }
             bool Decorates() const override { return cpu && cpu->Decorates(); }
             const json::Value* Spawns(int tableIndex) const override { return cpu ? cpu->Spawns(tableIndex) : nullptr; }
-            void Decorate(ChunkPos pos, const ChunkColumn* const region[9], ChunkColumn& out) const override {
+            void Decorate(ChunkPos pos, const ChunkColumn* const region[], ChunkColumn& out) const override {
                 cpu->Decorate(pos, region, out);
             }
 

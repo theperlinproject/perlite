@@ -24,7 +24,7 @@ namespace perlite::vanilla {
                          int& y, int& z) override;
         bool HasBiomes() const override { return true; }
         bool Decorates() const override { return decorator && decorator->Ok(); }
-        void Decorate(ChunkPos pos, const ChunkColumn* const region[9], ChunkColumn& out) const override {
+        void Decorate(ChunkPos pos, const ChunkColumn* const region[], ChunkColumn& out) const override {
             decorator->Decorate(pos.x, pos.z, region, out);
         }
         const JavaDecorator* Decorator() const { return decorator.get(); }

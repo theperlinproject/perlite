@@ -56,8 +56,7 @@ namespace perlite {
         m.z = z;
         m.health = 1;
         m.persistent = true;
-        mobs.push_back(m);
-        Mob& added = mobs.back();
+        Mob& added = Add(m);
         for (Session* s : server.PlayersIn(kOverworld))
             s->ShowMob(added);
         added.lastX = static_cast<float>(x);

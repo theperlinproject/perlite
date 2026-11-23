@@ -67,16 +67,17 @@ int main(int argc, char** argv) {
     std::printf("world %s, seed %llu, chunks %d,%d .. %d,%d\n", argv[1], static_cast<unsigned long long>(level.seed),
                 x0, z0, x1, z1);
 
-    // Raw terrain with a one-chunk border, then decoration of the inner chunks.
+    // Raw terrain with a border as wide as decoration reads, then decoration of the inner chunks.
+    constexpr int border = kDecorationReach;
     std::vector<ChunkPos> rawPos;
-    for (int x = x0 - 1; x <= x1 + 1; x++)
-        for (int z = z0 - 1; z <= z1 + 1; z++)
+    for (int x = x0 - border; x <= x1 + border; x++)
+        for (int z = z0 - border; z <= z1 + border; z++)
             rawPos.push_back({x, z});
     std::vector<ChunkColumn> raw(rawPos.size());
     backend->Generate(rawPos, raw);
-    const int side = z1 - z0 + 3;
+    const int side = z1 - z0 + 1 + 2 * border;
     const auto rawAt = [&](int x, int z) -> ChunkColumn& {
-        return raw[static_cast<size_t>((x - x0 + 1) * side + (z - z0 + 1))];
+        return raw[static_cast<size_t>((x - x0 + border) * side + (z - z0 + border))];
     };
 
     const BlockRegistry& r = BlockRegistry::Instance();
@@ -94,10 +95,10 @@ int main(int argc, char** argv) {
             }
             ChunkColumn ours = rawAt(cx, cz).Clone();
             if (backend->Decorates()) {
-                const ChunkColumn* region[9];
-                for (int dx = -1; dx <= 1; dx++)
-                    for (int dz = -1; dz <= 1; dz++)
-                        region[(dz + 1) * 3 + (dx + 1)] = &rawAt(cx + dx, cz + dz);
+                const ChunkColumn* region[kDecorationArea];
+                for (int dx = -kDecorationReach; dx <= kDecorationReach; dx++)
+                    for (int dz = -kDecorationReach; dz <= kDecorationReach; dz++)
+                        region[DecorationSlot(dx, dz)] = &rawAt(cx + dx, cz + dz);
                 backend->Decorate({cx, cz}, region, ours);
             }
             for (int x = 0; x < 16; x++)

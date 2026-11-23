@@ -80,6 +80,8 @@ namespace perlite {
             f |= F::Angry;
         if (m.fuse >= 0)
             f |= F::Ignited;
+        if (m.kind == actorkind::Projectile && m.crit && !m.stuck)
+            f |= F::Critical;
         return f;
     }
 
@@ -113,9 +115,36 @@ namespace perlite {
         }
         m.maxHealth = m.health;
         m.persistent = persistent;
+        // What the mob holds, as vanilla equips it on spawn.
+        {
+            const std::string_view id = m.def->id;
+            const char* item = nullptr;
+            if (id == "minecraft:skeleton" || id == "minecraft:stray" || id == "minecraft:bogged")
+                item = "minecraft:bow";
+            else if (id == "minecraft:wither_skeleton")
+                item = "minecraft:stone_sword";
+            else if (id == "minecraft:pillager")
+                item = "minecraft:crossbow";
+            else if (id == "minecraft:piglin")
+                item = rng() % 2 ? "minecraft:golden_sword" : "minecraft:crossbow";
+            else if (id == "minecraft:zombie_pigman" || id == "minecraft:zombified_piglin")
+                item = "minecraft:golden_sword";
+            else if (id == "minecraft:piglin_brute")
+                item = "minecraft:golden_axe";
+            else if (id == "minecraft:vindicator")
+                item = "minecraft:iron_axe";
+            else if (id == "minecraft:vex")
+                item = "minecraft:iron_sword";
+            else if (id == "minecraft:drowned" && rng() % 16 == 0)
+                item = "minecraft:trident";
+            else if (id == "minecraft:fox" && rng() % 5 == 0)
+                item = "minecraft:sweet_berries";
+            if (item)
+                if (const CatalogItem* c = BlockCatalog::Instance().ItemByName(item))
+                    m.held = c->networkId;
+        }
         m.yaw = m.headYaw = static_cast<float>(rng() % 360);
-        mobs.push_back(m);
-        Mob& added = mobs.back();
+        Mob& added = Add(m);
         for (Session* s : server.PlayersIn(kOverworld))
             s->ShowMob(added);
         added.lastX = static_cast<float>(x);
@@ -126,10 +155,40 @@ namespace perlite {
     }
 
     Mob* ActorManager::Find(uint64_t id) {
-        for (Mob& m : mobs)
-            if (m.id == id)
-                return &m;
-        return nullptr;
+        const auto it = byId.find(id);
+        return it == byId.end() ? nullptr : it->second;
+    }
+
+    Mob& ActorManager::Add(const Mob& m) {
+        mobs.push_back(m);
+        Mob& added = mobs.back();
+        byId[added.id] = &added;
+        return added;
+    }
+
+    std::list<Mob>::iterator ActorManager::Erase(std::list<Mob>::iterator it) {
+        byId.erase(it->id);
+        if (it->inGrid)
+            if (const auto cell = grid.find(it->gridCell); cell != grid.end())
+                std::erase(cell->second, &*it);
+        return mobs.erase(it);
+    }
+
+    void ActorManager::RebuildGrid() {
+        for (auto& [cell, list] : grid)
+            list.clear();
+        for (Mob& m : mobs) {
+            m.inGrid = false;
+            if (m.deathTime != 0)
+                continue;
+            const int64_t cell = (static_cast<int64_t>(static_cast<int>(std::floor(m.x)) >> 3) << 32) ^
+                                 static_cast<int64_t>(static_cast<uint32_t>(static_cast<int>(std::floor(m.z)) >> 3));
+            grid[cell].push_back(&m);
+            m.inGrid = true;
+            m.gridCell = cell;
+        }
+        if (grid.size() > 4 * mobs.size() + 1024)
+            std::erase_if(grid, [](const auto& e) { return e.second.empty(); });
     }
 
     bool ActorManager::Kill(uint64_t id) {
@@ -147,7 +206,7 @@ namespace perlite {
             return false;
         for (Session* s : server.PlayersIn(kOverworld))
             s->HideItem(id);
-        mobs.erase(it);
+        Erase(it);
         return true;
     }
 
@@ -205,10 +264,14 @@ namespace perlite {
         const bool moved = std::abs(static_cast<float>(m.x) - m.lastX) > 0.005f || std::abs(static_cast<float>(m.y) - m.lastY) > 0.005f ||
                            std::abs(static_cast<float>(m.z) - m.lastZ) > 0.005f || Angle(m.yaw) != Angle(m.lastYaw) ||
                            Angle(m.headYaw) != Angle(m.lastHead);
-        const std::vector<Session*> players = server.PlayersIn(kOverworld);
+        std::vector<Session*> fresh;
+        if (!ticking)
+            fresh = server.PlayersIn(kOverworld);
+        const std::vector<Session*>& players = ticking ? tickPlayers : fresh;
         if (moved || force) {
+            const Session::Encoded move = Session::EncodeMoveMob(m);
             for (Session* s : players)
-                s->MoveMob(m);
+                s->SendEncoded(move);
             m.lastX = static_cast<float>(m.x);
             m.lastY = static_cast<float>(m.y);
             m.lastZ = static_cast<float>(m.z);
@@ -224,6 +287,11 @@ namespace perlite {
     }
 
     void ActorManager::Tick() {
+        effectsThisTick = 0;
+        fuseSoundsThisTick = 0;
+        tickPlayers = server.PlayersIn(kOverworld);
+        ticking = true;
+        RebuildGrid();
         if (++spawnTick % 20 == 0)
             NaturalSpawns();
         const std::vector<Session*> players = server.PlayersIn(kOverworld);
@@ -246,8 +314,20 @@ namespace perlite {
                 }
                 if (!remove && m.kind != actorkind::Mob) {
                     remove = TickSpecial(m);
-                    if (!remove)
-                        Broadcast(m, false);
+                    if (!remove) {
+                        // Primed TNT and falling blocks fly on the client from their motion; their
+                        // position is corrected every few ticks, and the motion sent when an
+                        // explosion pushes them.
+                        const bool ballistic = m.kind == actorkind::PrimedTnt || m.kind == actorkind::FallingBlock;
+                        if (!ballistic || (m.age + static_cast<int>(m.id)) % 5 == 0)
+                            Broadcast(m, false);
+                        if (m.kicked) {
+                            const Session::Encoded motion = Session::EncodeMobMotion(m, server.TickCount());
+                            for (Session* s : players)
+                                s->SendEncoded(motion);
+                            m.kicked = false;
+                        }
+                    }
                 } else if (!remove) {
                     if (m.hurtTime > 0)
                         m.hurtTime--;
@@ -269,11 +349,14 @@ namespace perlite {
             if (remove) {
                 for (Session* s : players)
                     s->HideItem(m.id);
-                it = mobs.erase(it);
+                it = Erase(it);
             } else {
                 ++it;
             }
         }
+        RunBlasts();
+        ticking = false;
+        tickPlayers.clear();
     }
 
     bool ActorManager::TickSpecial(Mob& m) {

@@ -57,6 +57,47 @@ namespace perlite {
         p.attributes.push_back(move);
         p.metadata = MobMetadata(mob);
         Send(p);
+        if (mob.held != 0) {
+            proto::MobEquipmentPacket hand;
+            hand.runtimeEntityId = mob.id;
+            ItemStack stack;
+            stack.networkId = mob.held;
+            stack.count = 1;
+            hand.item = ToWire(stack);
+            hand.item.hasStackId = false;
+            hand.item.stackId.reset();
+            hand.slot = 0;
+            hand.selectedSlot = 0;
+            hand.windowId = proto::WindowID::Inventory;
+            Send(hand);
+        }
+    }
+
+    Session::Encoded Session::EncodeMoveMob(const Mob& mob) {
+        proto::MoveEntityPacket p;
+        p.runtimeEntityId = mob.id;
+        p.flags = mob.onGround ? 1 : 0;
+        p.position = {static_cast<float>(mob.x), static_cast<float>(mob.y), static_cast<float>(mob.z)};
+        p.rotation.pitch = MobAngle(mob.pitch);
+        p.rotation.yaw = MobAngle(mob.yaw);
+        p.rotation.headYaw = MobAngle(mob.headYaw);
+        Encoded e;
+        e.id = proto::MoveEntityPacket::kId;
+        if (!net::EncodeChecked(p, e.body))
+            e.body.clear();
+        return e;
+    }
+
+    Session::Encoded Session::EncodeMobMotion(const Mob& mob, uint64_t tick) {
+        proto::SetEntityMotionPacket p;
+        p.runtimeEntityId = mob.id;
+        p.velocity = {static_cast<float>(mob.vx), static_cast<float>(mob.vy), static_cast<float>(mob.vz)};
+        p.tick = tick;
+        Encoded e;
+        e.id = proto::SetEntityMotionPacket::kId;
+        if (!net::EncodeChecked(p, e.body))
+            e.body.clear();
+        return e;
     }
 
     void Session::MoveMob(const Mob& mob) {

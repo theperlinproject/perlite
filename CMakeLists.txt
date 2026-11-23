@@ -84,6 +84,7 @@ set(PERLITE_SOURCES
     src/server/Server.cpp
     src/server/Placement.cpp
     src/server/Fire.cpp
+    src/server/Fluids.cpp
     src/server/RandomTicks.cpp
     src/server/VanillaPack.cpp
     src/server/ServerData.cpp

@@ -27,6 +27,7 @@
 #include <tuple>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace perlite {
@@ -116,6 +117,7 @@ namespace perlite {
         // announce: log Java's "Saving chunks for level ..." lines (stop and save commands).
         // Autosaves only log at debug level.
         void SaveWorld(bool announce = false);
+        void EmergencySave();
         // Warns, at most every 15 seconds, when the tick loop has fallen behind.
         void NoteLag(std::chrono::milliseconds behind);
         void LoadPlayer(Session& session);
@@ -156,6 +158,9 @@ namespace perlite {
         void SetLiquidAt(int dimension, int x, int y, int z, uint16_t liquid);
         // Sets fire to an air block that has something to burn or stand on.
         bool LightFire(int dimension, int x, int y, int z);
+        // Fills an empty bucket from the source the player looks at, or pours a full one out
+        // against the clicked face.
+        bool UseBucket(Session& by, const std::string& item, bool clicked, int x, int y, int z, int face);
         void BreakPartner(int dimension, int x, int y, int z, uint16_t broken);
         void SendBlockTo(Session& to, int x, int y, int z);
         void DropFromPlayer(Session& by, const ItemStack& stack);
@@ -355,6 +360,13 @@ namespace perlite {
         void TickPortals();
         void TickGravity();
         void TickFire();
+        void TickFluids();
+        void QueueBlockUpdate(int dimension, int x, int y, int z, uint16_t block, int layer);
+        void FlushBlockUpdates();
+        void FlowAt(int dimension, int x, int y, int z);
+        int FluidDelay(int dimension, uint16_t block) const;
+        void ScheduleFluid(int dimension, int x, int y, int z, int delay);
+        void FluidNeighbourChanged(int dimension, int x, int y, int z);
         void ScheduleFire(int dimension, int x, int y, int z);
         // Random block ticks around players: crops, saplings, grass, leaves and the rest of the
         // blocks that change by themselves over time.
@@ -366,6 +378,17 @@ namespace perlite {
             int dimension, x, y, z, due;
         };
         std::vector<FireTick> fireQueue;
+        struct FluidTick {
+            int dimension, x, y, z, due;
+        };
+        std::vector<FluidTick> fluidQueue;
+        struct PendingChunkBlocks {
+            int dimension = 0;
+            ChunkPos chunk{};
+            std::map<std::array<int, 4>, uint16_t> changes; // x y z layer -> block
+        };
+        std::unordered_map<uint64_t, PendingChunkBlocks> pendingBlocks;
+        std::unordered_set<uint64_t> fluidPending;
         void TravelThroughPortal(Session& who, bool endPortal);
         bool PortalTargetReady(Session& who, bool endPortal);
         void BuildEndPlatform();

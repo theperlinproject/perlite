@@ -318,6 +318,16 @@ namespace perlite {
             out.push_back(FloatEntry(proto::MetadataDictionaryEntryKey::BoundingboxHeight, body.height));
             if (mob.variant >= 0)
                 out.push_back(IntEntry(proto::MetadataDictionaryEntryKey::Variant, mob.variant));
+            if (mob.kind == actorkind::Projectile && mob.owner != 0) {
+                // Who shot it: the client draws the arrow as theirs and does not hit them with it.
+                proto::MetadataDictionaryEntry owner;
+                owner.key = proto::MetadataDictionaryEntryKey::OwnerEid;
+                owner.type = proto::MetadataDictionaryEntryType::Long;
+                owner.legacyType = static_cast<uint8_t>(owner.type);
+                auto& inner = owner.value.template emplace<4>();
+                inner.template emplace<8>(static_cast<int64_t>(mob.owner));
+                out.push_back(owner);
+            }
             return out;
         }
 

@@ -17,6 +17,9 @@
 #include <atomic>
 #include <csignal>
 #include <cstring>
+#include <exception>
+#include <mutex>
+#include <vector>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -26,11 +29,55 @@ using namespace perlite;
 
 namespace {
     std::atomic<Server*> g_server{nullptr};
+    std::atomic<bool> g_stopped{false};
 
     void OnSignal(int) {
         if (Server* s = g_server.load())
             s->RequestStop();
     }
+
+    // A crash still saves what it can: the world, the players and the level, then the process dies
+    // the way it would have.
+    void OnCrash(int sig) {
+        std::signal(sig, SIG_DFL);
+        if (Server* s = g_server.load()) {
+            LogError(std::string("Crashed (signal ") + std::to_string(sig) + ")");
+            s->EmergencySave();
+        }
+        std::raise(sig);
+    }
+
+    [[noreturn]] void OnTerminate() {
+        if (Server* s = g_server.load()) {
+            LogError("Crashed (uncaught exception)");
+            s->EmergencySave();
+        }
+        std::abort();
+    }
+
+#ifdef _WIN32
+    // Closing the console window, logging off or shutting down gives the process a few seconds:
+    // the tick loop stops and saves the world in them.
+    BOOL WINAPI OnConsoleEvent(DWORD event) {
+        Server* s = g_server.load();
+        if (!s)
+            return FALSE;
+        s->RequestStop();
+        if (event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT)
+            return TRUE;
+        for (int i = 0; i < 90 && !g_stopped.load(); i++)
+            Sleep(50);
+        return TRUE;
+    }
+
+    LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS*) {
+        if (Server* s = g_server.load()) {
+            LogError("Crashed (unhandled exception)");
+            s->EmergencySave();
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+#endif
 }
 
 int main(int argc, char** argv) {
@@ -101,6 +148,19 @@ int main(int argc, char** argv) {
     g_server = &server;
     std::signal(SIGINT, OnSignal);
     std::signal(SIGTERM, OnSignal);
+#ifdef SIGHUP
+    std::signal(SIGHUP, OnSignal); // the terminal was closed
+#endif
+    for (int sig : {SIGSEGV, SIGFPE, SIGILL, SIGABRT})
+        std::signal(sig, OnCrash);
+#ifdef SIGBUS
+    std::signal(SIGBUS, OnCrash);
+#endif
+    std::set_terminate(OnTerminate);
+#ifdef _WIN32
+    SetConsoleCtrlHandler(OnConsoleEvent, TRUE);
+    SetUnhandledExceptionFilter(OnUnhandledException);
+#endif
 
     struct ConsoleInput {
         std::mutex mutex;
@@ -137,8 +197,9 @@ int main(int argc, char** argv) {
         } else
             std::this_thread::sleep_until(next);
     }
-    g_server = nullptr;
     server.Stop();
+    g_server = nullptr;
+    g_stopped = true;
     perlite::ProcessTasks().Shutdown();
     return 0;
 }

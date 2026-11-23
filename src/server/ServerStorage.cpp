@@ -1,5 +1,6 @@
 #include "server/Server.hpp"
 
+#include <atomic>
 #include <fstream>
 
 #include "common/Log.hpp"
@@ -139,6 +140,20 @@ namespace perlite {
             LogInfo(summary);
         else if (chunksSaved > 0)
             LogDebug("Autosave: " + summary);
+    }
+
+    // Last-chance save when the process is about to die (a crash, or the console window closing):
+    // everything that can be written is written and flushed. Runs at most once.
+    void Server::EmergencySave() {
+        static std::atomic<bool> once{false};
+        if (!storage || once.exchange(true))
+            return;
+        try {
+            LogWarn("Saving the world before exiting");
+            SaveWorld(true);
+            LogInfo("World saved");
+        } catch (...) {
+        }
     }
 
     void Server::AutosaveTick() {

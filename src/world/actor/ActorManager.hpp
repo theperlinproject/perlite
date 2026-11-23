@@ -1,10 +1,14 @@
 #pragma once
 #include "world/actor/mob/MobDef.hpp"
 
+#include <array>
+#include <atomic>
+#include <memory>
 #include <cstdint>
 #include <list>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -70,6 +74,13 @@ namespace perlite {
         bool stuck = false;     // an arrow in a block
         bool canPickup = false; // an arrow a survival player can take back
         bool crit = false;      // a fully drawn arrow
+        int16_t held = 0;       // item network id in the main hand (skeleton's bow), 0 for none
+        float arrowDamage = 2.0f; // an arrow's damage per block/tick of speed (Power raises it)
+        int punch = 0;            // Punch level: extra knockback
+        bool flame = false;       // sets what it hits on fire
+        bool inGrid = false;      // listed in the entity grid, under gridCell
+        bool kicked = false;      // pushed by an explosion this tick: the client gets the new motion
+        int64_t gridCell = 0;
     };
 
     class ActorManager {
@@ -99,6 +110,7 @@ namespace perlite {
         bool Interact(Session& by, uint64_t entity);
         Mob* Find(uint64_t id);
         const std::list<Mob>& All() const { return mobs; }
+        size_t Count() const { return mobs.size(); }
         void OnChunkReady(int chunkX, int chunkZ);
         static uint64_t Flags(const Mob& m);
 
@@ -126,8 +138,54 @@ namespace perlite {
         void Land(Mob& m, double x, double y, double z, Session* shooter);
         void Shoot(Mob& m, Session& at);
 
+        // Adds a mob to the list and the id index; every new entity goes through here.
+        Mob& Add(const Mob& m);
+        std::list<Mob>::iterator Erase(std::list<Mob>::iterator it);
+        // Entities by 8x8 column cell, rebuilt at the start of every tick: explosions and
+        // projectiles look only at the cells they reach instead of at every entity.
+        void RebuildGrid();
+        struct Blast {
+            double x = 0, y = 0, z = 0;
+            float power = 0;
+            uint64_t source = 0;
+            bool breakBlocks = true;
+            bool fromTnt = false;
+            std::string originType;
+            uint32_t seed = 0;
+            bool coarse = false; // fewer rays: only in ticks with hundreds of explosions
+        };
+        Blast MakeBlast(double x, double y, double z, float power, uint64_t source, bool breakBlocks);
+        void TraceBlast(const Blast& blast, std::vector<std::array<int, 3>>& broken) const;
+        void ApplyBlast(const Blast& blast, const std::vector<std::array<int, 3>>& broken);
+        void RunBlasts();
+        std::vector<Blast> pendingBlasts;
+        // During RunBlasts: for each 4x4x4 brick of the box around the tick's blasts, 0 unknown,
+        // 1 all air, 2 not.
+        struct BrickTable {
+            int ox = 0, oy = 0, oz = 0, sx = 0, sy = 0, sz = 0;
+            std::unique_ptr<std::atomic<int8_t>[]> states;
+            size_t capacity = 0;
+            void Reset(const std::vector<Blast>& blasts);
+            void Clear() { sx = sy = sz = 0; }
+            std::atomic<int8_t>* At(int bx, int by, int bz) const {
+                const int ix = bx - ox, iy = by - oy, iz = bz - oz;
+                if (ix < 0 || iy < 0 || iz < 0 || ix >= sx || iy >= sy || iz >= sz)
+                    return nullptr;
+                return &states[(static_cast<size_t>(iy) * static_cast<size_t>(sz) + static_cast<size_t>(iz)) * static_cast<size_t>(sx) +
+                               static_cast<size_t>(ix)];
+            }
+        };
+        mutable BrickTable bricks;
+        template <class F> void ForNear(double x, double z, double radius, F&& f);
+
         Server& server;
         std::list<Mob> mobs;
+        std::unordered_map<uint64_t, Mob*> byId;
+        std::unordered_map<int64_t, std::vector<Mob*>> grid;
+        int effectsThisTick = 0;
+        int fuseSoundsThisTick = 0;
+        std::vector<Session*> tickPlayers; // the overworld's players, taken at the start of a tick
+        bool ticking = false;
         std::unordered_set<uint64_t> spawnedChunks;
         std::mt19937 rng{0xC0FFEE};
         uint64_t nextId = 5'000'000;

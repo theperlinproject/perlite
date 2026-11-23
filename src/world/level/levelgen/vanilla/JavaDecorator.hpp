@@ -28,7 +28,7 @@ namespace perlite::vanilla {
         ~JavaDecorator();
         bool Ok() const { return ok; }
 
-        void Decorate(int chunkX, int chunkZ, const ChunkColumn* const region[9], ChunkColumn& out) const;
+        void Decorate(int chunkX, int chunkZ, const ChunkColumn* const region[], ChunkColumn& out) const;
 
         const JavaBiome* Biome(int tableIndex) const;
         float Temperature(int tableIndex, int x, int y, int z) const;

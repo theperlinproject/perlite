@@ -1,4 +1,5 @@
 #include "world/level/levelgen/vanilla/JavaDecorator.hpp"
+#include "world/level/levelgen/Generator.hpp"
 #include <atomic>
 
 #include "world/level/block/BlockCatalog.hpp"
@@ -303,7 +304,7 @@ namespace perlite::vanilla {
             int originX = 0, originZ = 0;
             std::unordered_map<int64_t, uint16_t> overlay;
             std::vector<std::pair<int64_t, uint16_t>> writes;
-            mutable std::array<int16_t, 9 * 256 * 3> heights;
+            mutable std::array<int16_t, kDecorationArea * 256 * 3> heights;
             std::string topFeature;
             std::vector<Pos> logs, leaves;
             bool tracking = false;
@@ -313,10 +314,10 @@ namespace perlite::vanilla {
                        static_cast<int64_t>(y - kMinY);
             }
             const ChunkColumn* Column(int x, int z) const {
-                const int dx = (x >> 4) - cx + 1, dz = (z >> 4) - cz + 1;
-                if (dx < 0 || dx > 2 || dz < 0 || dz > 2)
+                const int dx = (x >> 4) - cx, dz = (z >> 4) - cz;
+                if (dx < -kDecorationReach || dx > kDecorationReach || dz < -kDecorationReach || dz > kDecorationReach)
                     return nullptr;
-                return region[dz * 3 + dx];
+                return region[DecorationSlot(dx, dz)];
             }
             uint16_t Raw(int x, int y, int z) const {
                 if (y < kMinY || y > kMaxY)
@@ -383,8 +384,8 @@ namespace perlite::vanilla {
                     kind = 1;
                 else if (type.starts_with("MOTION_BLOCKING"))
                     kind = 2;
-                const int dx = (x >> 4) - cx + 1, dz = (z >> 4) - cz + 1;
-                const size_t slot = static_cast<size_t>(((dz * 3 + dx) * 256 + (x & 15) * 16 + (z & 15)) * 3 + kind);
+                const size_t slot = static_cast<size_t>(
+                    (DecorationSlot((x >> 4) - cx, (z >> 4) - cz) * 256 + (x & 15) * 16 + (z & 15)) * 3 + kind);
                 if (heights[slot] != INT16_MIN)
                     return heights[slot];
                 int y = kMaxY;
@@ -2183,7 +2184,7 @@ namespace perlite::vanilla {
         return it != impl->tags.end() && it->second.contains(name);
     }
 
-    void JavaDecorator::Decorate(int chunkX, int chunkZ, const ChunkColumn* const region[9], ChunkColumn& out) const {
+    void JavaDecorator::Decorate(int chunkX, int chunkZ, const ChunkColumn* const region[], ChunkColumn& out) const {
         if (!ok)
             return;
         const Impl& d = *impl;
@@ -2195,7 +2196,7 @@ namespace perlite::vanilla {
         world.heights.fill(INT16_MIN);
         for (int oz = -1; oz <= 1; oz++)
             for (int ox = -1; ox <= 1; ox++) {
-                const ChunkColumn* own = region[(oz + 1) * 3 + ox + 1];
+                const ChunkColumn* own = region[DecorationSlot(ox, oz)];
                 if (!own)
                     continue;
                 const int originX = (chunkX + ox) * 16, originZ = (chunkZ + oz) * 16;

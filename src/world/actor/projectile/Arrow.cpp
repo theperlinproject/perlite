@@ -72,8 +72,7 @@ namespace perlite {
         const double flat = std::sqrt(vx * vx + vz * vz);
         m.yaw = m.headYaw = static_cast<float>(std::atan2(-vx, vz) * 180.0 / kPi);
         m.pitch = static_cast<float>(-std::atan2(vy, flat) * 180.0 / kPi);
-        mobs.push_back(m);
-        Mob& added = mobs.back();
+        Mob& added = Add(m);
         for (Session* s : server.PlayersIn(kOverworld)) {
             s->ShowMob(added);
             s->MobMotion(added);
@@ -92,9 +91,18 @@ namespace perlite {
         const double dx = at.X() - sx, dy = (at.Y() - 0.6) - sy, dz = at.Z() - sz;
         const double flat = std::sqrt(dx * dx + dz * dz);
         const double len = std::max(0.01, std::sqrt(dx * dx + dy * dy + dz * dz));
+        // power 1.6 and an aim off by (16 - 4 x difficulty) x 0.0075 (the vanilla mob_arrow).
         const double speed = 1.6;
-        SpawnProjectile(projectile::Arrow, sx, sy, sz, dx / len * speed, (dy + flat * 0.2) / len * speed,
-                        dz / len * speed, m.id, false);
+        std::normal_distribution<double> gauss(0.0, 1.0);
+        const double spread = 0.0075 * std::max(0, 16 - 4 * server.Config().difficulty);
+        double vx = dx / len + gauss(rng) * spread, vy = (dy + flat * 0.2) / len + gauss(rng) * spread,
+               vz = dz / len + gauss(rng) * spread;
+        const double vlen = std::max(1e-6, std::sqrt(vx * vx + vy * vy + vz * vz));
+        Mob* arrow = SpawnProjectile(projectile::Arrow, sx, sy, sz, vx / vlen * speed, vy / vlen * speed, vz / vlen * speed, m.id,
+                                     false);
+        if (arrow)
+            for (Session* s : server.PlayersIn(kOverworld))
+                s->PlaySound("Bow", sx, sy, sz);
     }
 
     void ActorManager::TickProjectile(Mob& m) {
@@ -234,18 +242,33 @@ namespace perlite {
             const double hx = x0 + dx * entityT, hy = y0 + dy * entityT, hz = z0 + dz * entityT;
             const double horiz = std::max(1e-6, std::sqrt(dx * dx + dz * dz));
             if (m.shot == projectile::Arrow) {
-                float damage = static_cast<float>(std::ceil(std::clamp(length * 2.0, 0.0, 2147483647.0)));
+                float damage = static_cast<float>(std::ceil(std::clamp(length * m.arrowDamage, 0.0, 2147483647.0)));
                 if (m.crit)
                     damage += static_cast<float>(rng() % static_cast<unsigned>(damage / 2.0f + 2.0f));
                 if (hitPlayer) {
-                    if (shooter && hitPlayer != shooter && !server.RuleValue("pvp")) {
-                        // Arrows pass harmlessly when players cannot fight; it drops where it was.
-                    } else {
-                        hitPlayer->Damage(damage, Session::DamageCause::Projectile, hx - dx / horiz, hz - dz / horiz, from,
-                                          shooter, 0.4f);
+                    bool dealt = false;
+                    if (!(shooter && hitPlayer != shooter && !server.RuleValue("pvp")))
+                        dealt = hitPlayer->Damage(damage, Session::DamageCause::Projectile, hx - dx / horiz, hz - dz / horiz,
+                                                  from, shooter, 0.4f + 0.5f * static_cast<float>(m.punch));
+                    if (!dealt) {
+                        // should_bounce "if_no_damage_dealt": it glances off.
+                        m.x = hx - dx * 0.05;
+                        m.y = hy - dy * 0.05;
+                        m.z = hz - dz * 0.05;
+                        m.vx *= -0.1;
+                        m.vy *= -0.1;
+                        m.vz *= -0.1;
+                        m.kicked = true;
+                        return false;
                     }
+                    if (m.flame)
+                        hitPlayer->SetOnFire(5);
                 } else {
-                    Hurt(*hitMob, damage, hx - dx / horiz, hz - dz / horiz, shooter);
+                    Hurt(*hitMob, damage, hx - dx / horiz, hz - dz / horiz, shooter, 0.4f + 0.5f * static_cast<float>(m.punch));
+                    if (m.flame) {
+                        hitMob->burning = true;
+                        hitMob->burnTicks = std::max(hitMob->burnTicks, 100);
+                    }
                 }
                 if (shooter)
                     shooter->PlaySound("BowHit", hx, hy, hz);
@@ -302,8 +325,11 @@ namespace perlite {
         m.z = z0 + dz;
         const bool water = BlockLiquid(blockAt(static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y)),
                                                static_cast<int>(std::floor(m.z))));
-        const double drag = water ? (m.shot == projectile::Arrow ? 0.6 : 0.8) : 0.99;
-        const double gravity = m.shot == projectile::Arrow ? 0.05 : m.shot == projectile::XpBottle ? 0.07 : 0.03;
+        // inertia / liquid_inertia and gravity of the vanilla projectile definitions.
+        const double drag = m.shot == projectile::EnderPearl ? 1.0 : water ? 0.6 : 0.99;
+        const double gravity = m.shot == projectile::Arrow || m.shot == projectile::XpBottle ? 0.05
+                               : m.shot == projectile::EnderPearl                          ? 0.025
+                                                                                           : 0.03;
         m.vx *= drag;
         m.vy *= drag;
         m.vz *= drag;
@@ -319,6 +345,13 @@ namespace perlite {
     // A thrown projectile breaks where it lands.
     void ActorManager::Land(Mob& m, double x, double y, double z, Session* shooter) {
         const std::vector<Session*> players = server.PlayersIn(kOverworld);
+        // particle_on_hit: a snowball puffs, an egg cracks.
+        if (m.shot == projectile::Snowball || m.shot == projectile::Egg) {
+            const CatalogItem* egg = m.shot == projectile::Egg ? BlockCatalog::Instance().ItemByName("minecraft:egg") : nullptr;
+            for (Session* s : players)
+                for (int i = 0; i < 6; i++)
+                    s->SendLevelEvent(m.shot == projectile::Snowball ? 16399 : 16398, x, y, z, egg ? (egg->networkId << 16) : 0);
+        }
         switch (m.shot) {
         case projectile::Egg:
             if (rng() % 8 == 0) {
@@ -333,14 +366,18 @@ namespace perlite {
                 shooter->Teleport(x, y + 1.62, z);
                 if (!shooter->Creative())
                     shooter->Damage(5.0f, Session::DamageCause::Fall, x, z);
+                if (rng() % 20 == 0)
+                    Spawn("minecraft:endermite", x, y, z, true);
                 for (Session* s : players)
                     s->PlaySound("Teleport", x, y, z);
             }
             break;
         case projectile::XpBottle:
             SpawnXpOrbs(x, y, z, 3 + static_cast<int>(rng() % 5) + static_cast<int>(rng() % 5));
-            for (Session* s : players)
+            for (Session* s : players) {
                 s->PlaySound("Glass", x, y, z);
+                s->SendLevelEvent(2002, x, y, z, 0x385DC6); // the bottle's blue splash
+            }
             break;
         default:
             break;

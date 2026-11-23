@@ -516,11 +516,13 @@ int main(int argc, char** argv) {
                     CHECK(ab[0].abilities[0].flySpeed == 0.05f * static_cast<float>(level));
                     CHECK(ab[0].abilities[0].verticalFlySpeed == static_cast<float>(level));
                 }
-                const auto bar = alice.Take<proto::TextPacket>();
+                // The action bar goes out as a title, never as a text packet (a jukebox popup text
+                // packet got the client to disconnect).
+                CHECK(alice.Take<proto::TextPacket>().empty());
                 bool shown = false;
-                for (const auto& t : bar)
-                    shown = shown || (t.type == proto::TextPacketType::JukeboxPopup &&
-                                      t.message == "Flying speed: " + std::to_string(level) + "x");
+                for (const auto& t : alice.Take<proto::SetTitlePacket>())
+                    shown = shown || (t.type == proto::SetTitlePacketType::ActionBarMessage &&
+                                      t.text == "Flying speed: " + std::to_string(level) + "x");
                 CHECK(shown);
             }
             run("/flyspeed 5x");
@@ -1345,15 +1347,46 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Water flows out seven blocks on flat ground and drains when its source goes; lava next to
+        // water hardens.
+        {
+            ChunkManager& w = survival.World(0);
+            const uint16_t water = BlockCatalog::Instance().DefaultBlock("minecraft:water");
+            survival.SetBlockIn(kOverworld, 20, -60, 20, water);
+            carol.Settle(80);
+            const auto depthAt = [&](int x, int z) -> int {
+                const uint16_t id = w.GetBlock(x, -60, z);
+                const std::string name = BlockRegistry::Instance().Name(id);
+                if (name != "minecraft:water" && name != "minecraft:flowing_water")
+                    return -1;
+                for (const auto& [k, v] : BlockRegistry::Instance().States(id))
+                    if (k == "liquid_depth")
+                        return std::get<int32_t>(v);
+                return -1;
+            };
+            CHECK(depthAt(20, 20) == 0);
+            CHECK(depthAt(21, 20) == 1 && depthAt(20, 23) == 3);
+            CHECK(depthAt(27, 20) == 7 && depthAt(28, 20) == -1);
+            CHECK(depthAt(22, 22) == 4);
+            survival.SetBlockIn(kOverworld, 20, -60, 20, BlockRegistry::kAir);
+            carol.Settle(120);
+            CHECK(depthAt(21, 20) == -1 && depthAt(25, 20) == -1);
+            // Lava source beside still water turns to obsidian.
+            survival.SetBlockIn(kOverworld, 30, -60, 30, water);
+            survival.SetBlockIn(kOverworld, 31, -60, 30, BlockCatalog::Instance().DefaultBlock("minecraft:lava"));
+            carol.Settle(40);
+            CHECK(BlockRegistry::Instance().Name(w.GetBlock(31, -60, 30)) == "minecraft:obsidian");
+        }
+
         // Random ticks grow crops on farmland near players.
         {
             const uint16_t farmland = BlockCatalog::Instance().DefaultBlock("minecraft:farmland");
             const uint16_t wheat = BlockCatalog::Instance().DefaultBlock("minecraft:wheat");
-            survival.World(0).SetBlock(3, -61, 3, farmland);
-            survival.World(0).SetBlock(3, -60, 3, wheat);
+            survival.World(0).SetBlock(-12, -61, -12, farmland);
+            survival.World(0).SetBlock(-12, -60, -12, wheat);
             CHECK(survival.SetRule("randomtickspeed", 4096));
             carol.Settle(40);
-            const uint16_t now = survival.World(0).GetBlock(3, -60, 3);
+            const uint16_t now = survival.World(0).GetBlock(-12, -60, -12);
             int growth = 0;
             for (const auto& [k, v] : BlockRegistry::Instance().States(now))
                 if (k == "growth")

@@ -211,6 +211,10 @@ namespace perlite {
         case proto::TransactionUseItemActionType::ClickAir:
             if (ThrowHeld())
                 break;
+            if (!inventory.Held().Empty() && ItemNameOf(inventory.Held().networkId) == "minecraft:bucket") {
+                server.UseBucket(*this, "minecraft:bucket", false, 0, 0, 0, -1);
+                break;
+            }
             if (!inventory.Held().Empty() && ItemNameOf(inventory.Held().networkId) == "minecraft:shield") {
                 shieldUp = true;
                 shieldOff = inventory.offActive;
@@ -299,28 +303,41 @@ namespace perlite {
         if (charge < 0.1f)
             return;
         charge = std::min(charge, 1.0f);
+        const ItemStack bow = inventory.Held();
+        const int power = bow.Enchant(19), punch = bow.Enchant(20), flame = bow.Enchant(21), infinity = bow.Enchant(22);
+        bool pickup = gameMode != 1;
         if (gameMode != 1) {
-            bool taken = false;
-            for (int i = 0; i < PlayerInventory::kMainSlots && !taken; i++) {
+            // Infinity keeps plain arrows (they cannot be picked up again); any other arrow is used.
+            bool found = false;
+            ItemStack* from = nullptr;
+            int fromSlot = -1;
+            if (ItemNameOf(inventory.offhand.networkId).ends_with("arrow"))
+                from = &inventory.offhand;
+            for (int i = 0; i < PlayerInventory::kMainSlots && !from; i++) {
                 ItemStack& s = inventory.main[static_cast<size_t>(i)];
-                if (!s.Empty() && ItemNameOf(s.networkId) == "minecraft:arrow") {
-                    s.count = static_cast<uint16_t>(s.count - 1);
-                    if (s.count == 0)
-                        s = ItemStack{};
-                    else
-                        s.stackId = inventory.NewStackId();
-                    SendSlot(i);
-                    taken = true;
+                if (!s.Empty() && ItemNameOf(s.networkId).ends_with("arrow")) {
+                    from = &s;
+                    fromSlot = i;
                 }
             }
-            if (!taken && ItemNameOf(inventory.offhand.networkId) == "minecraft:arrow") {
-                inventory.offhand.count = static_cast<uint16_t>(inventory.offhand.count - 1);
-                if (inventory.offhand.count == 0)
-                    inventory.offhand = ItemStack{};
-                taken = true;
-                SendInventory();
+            if (from) {
+                found = true;
+                const bool plain = ItemNameOf(from->networkId) == "minecraft:arrow";
+                if (infinity > 0 && plain) {
+                    pickup = false;
+                } else {
+                    from->count = static_cast<uint16_t>(from->count - 1);
+                    if (from->count == 0)
+                        *from = ItemStack{};
+                    else
+                        from->stackId = inventory.NewStackId();
+                    if (fromSlot >= 0)
+                        SendSlot(fromSlot);
+                    else
+                        SendInventory();
+                }
             }
-            if (!taken)
+            if (!found)
                 return;
             DamageHeld(1);
         }
@@ -330,11 +347,24 @@ namespace perlite {
         const double pitchRad = static_cast<double>(pitch) * 3.14159265358979323846 / 180.0;
         const double dirX = -std::sin(yawRad) * std::cos(pitchRad), dirY = -std::sin(pitchRad),
                      dirZ = std::cos(yawRad) * std::cos(pitchRad);
+        // power 3.0 x the draw, aimed off by uncertainty_base 1 (x 0.0075), as the vanilla player_arrow.
         const double speed = 3.0 * charge;
+        static std::mt19937 aimRng{std::random_device{}()};
+        std::normal_distribution<double> gauss(0.0, 0.0075);
+        double ax = dirX + gauss(aimRng), ay = dirY + gauss(aimRng), az = dirZ + gauss(aimRng);
+        const double alen = std::max(1e-6, std::sqrt(ax * ax + ay * ay + az * az));
+        ax /= alen;
+        ay /= alen;
+        az /= alen;
         if (Mob* arrow = server.Mobs().SpawnProjectile(projectile::Arrow, posX + dirX * 0.5, posY - 0.1 + dirY * 0.5,
-                                                       posZ + dirZ * 0.5, dirX * speed, dirY * speed, dirZ * speed,
-                                                       runtimeId, gameMode != 1))
+                                                       posZ + dirZ * 0.5, ax * speed, ay * speed, az * speed,
+                                                       runtimeId, pickup)) {
             arrow->crit = charge >= 1.0f;
+            if (power > 0)
+                arrow->arrowDamage += 0.5f * static_cast<float>(power) + 0.5f;
+            arrow->punch = punch;
+            arrow->flame = flame > 0;
+        }
         for (Session* s : server.PlayersIn(dimension))
             s->PlaySound("Bow", posX, posY, posZ);
         Exhaust(0.0f);
@@ -455,7 +485,7 @@ namespace perlite {
             type = projectile::EnderPearl;
         else if (n == "minecraft:experience_bottle") {
             type = projectile::XpBottle;
-            speed = 0.7;
+            speed = 0.5;
             aimPitch -= 20.0f;
         }
         if (type < 0)

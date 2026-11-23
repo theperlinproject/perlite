@@ -95,6 +95,17 @@ namespace perlite {
         void MoveItem(const ItemEntity& item);
         void TakeItem(uint64_t itemId, uint64_t takerRuntimeId);
         void ShowMob(const Mob& mob);
+        // A packet encoded once and queued for many players (entity moves go to everyone alike).
+        struct Encoded {
+            uint32_t id = 0;
+            std::vector<uint8_t> body;
+        };
+        static Encoded EncodeMoveMob(const Mob& mob);
+        static Encoded EncodeMobMotion(const Mob& mob, uint64_t tick);
+        void SendEncoded(const Encoded& packet) {
+            if (!packet.body.empty())
+                Queue(packet.id, packet.body);
+        }
         void MoveMob(const Mob& mob);
         void MobData(const Mob& mob);
         void MobMotion(const Mob& mob);
@@ -196,6 +207,13 @@ namespace perlite {
         void SetHealth(float value);
         void SetVelocity(double x, double y, double z);
         bool ThrowHeld();
+        // Sends a chunk the player already has again, after many of its blocks changed at once.
+        void ResendChunk(ChunkEntry& entry, ChunkPos pos) { SendChunk(entry, pos); }
+        void PrepareChunk(ChunkEntry& entry, ChunkPos pos);
+        void SetOnFire(int seconds) {
+            fireTicks = std::max(fireTicks, seconds * 20);
+            dataDirty = true;
+        }
         void SetSpawnPoint(int x, int y, int z);
         void Transfer(const std::string& host, uint16_t port);
         uint32_t ShowForm(const std::string& json);

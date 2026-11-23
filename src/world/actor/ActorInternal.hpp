@@ -74,16 +74,20 @@ namespace perlite {
             return a;
         }
 
+        inline float BlastResistanceOf(uint16_t id);
+        // Per block id, worked out once; read without a lock (an explosion reads tens of thousands).
         inline float BlastResistance(uint16_t id) {
-            static std::vector<float> memo;
-            static std::mutex memoMutex;
-            std::lock_guard lock(memoMutex);
-            if (id >= memo.size())
-                memo.resize(static_cast<size_t>(id) + 1, -1.0f);
-            float& v = memo[id];
-            if (v >= 0.0f)
-                return v;
-            const std::string& n = BlockRegistry::Instance().Name(id);
+            static std::atomic<uint8_t> known[0x10000] = {};
+            static float values[0x10000];
+            if (known[id].load(std::memory_order_acquire))
+                return values[id];
+            values[id] = BlastResistanceOf(id);
+            known[id].store(1, std::memory_order_release);
+            return values[id];
+        }
+        inline float BlastResistanceOf(uint16_t id) {
+            float v = 1.0f;
+            const std::string n = BlockRegistry::Instance().Name(id);
             const auto has = [&](const char* t) { return n.contains(t); };
             if (has("bedrock") || has("barrier") || has("command_block") || has("end_portal") || has("end_gateway") ||
                 has("structure_block") || has("jigsaw") || has("reinforced_deepslate") || n == "minecraft:light_block" ||
@@ -125,4 +129,19 @@ namespace perlite {
 
     }
     using namespace detail;
+
+    // Calls f for every entity whose grid cell is within radius of (x, z), as of the last rebuild;
+    // f checks the exact distance with the entity's current position.
+    template <class F> void ActorManager::ForNear(double x, double z, double radius, F&& f) {
+        const int x0 = static_cast<int>(std::floor(x - radius - 2.0)) >> 3, x1 = static_cast<int>(std::floor(x + radius + 2.0)) >> 3;
+        const int z0 = static_cast<int>(std::floor(z - radius - 2.0)) >> 3, z1 = static_cast<int>(std::floor(z + radius + 2.0)) >> 3;
+        for (int cx = x0; cx <= x1; cx++)
+            for (int cz = z0; cz <= z1; cz++) {
+                const auto it = grid.find((static_cast<int64_t>(cx) << 32) ^ static_cast<int64_t>(static_cast<uint32_t>(cz)));
+                if (it == grid.end())
+                    continue;
+                for (Mob* m : it->second)
+                    f(*m);
+            }
+    }
 }

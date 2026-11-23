@@ -170,8 +170,8 @@ namespace perlite {
     void ChunkManager::Finish(const std::vector<ChunkPos>& batch, std::vector<ChunkColumn>& columns) {
         std::vector<ChunkPos> wanted;
         for (const ChunkPos& p : batch)
-            for (int dz = -1; dz <= 1; dz++)
-                for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -kDecorationReach; dz <= kDecorationReach; dz++)
+                for (int dx = -kDecorationReach; dx <= kDecorationReach; dx++) {
                     const ChunkPos q{p.x + dx, p.z + dz};
                     if (std::ranges::find(wanted, q) == wanted.end())
                         wanted.push_back(q);
@@ -183,16 +183,17 @@ namespace perlite {
         });
         const auto raws = Raws(wanted);
         for (size_t i = 0; i < batch.size(); i++) {
-            const ChunkColumn* region[9] = {};
-            for (int dz = -1; dz <= 1; dz++)
-                for (int dx = -1; dx <= 1; dx++) {
+            const ChunkColumn* region[kDecorationArea] = {};
+            for (int dz = -kDecorationReach; dz <= kDecorationReach; dz++)
+                for (int dx = -kDecorationReach; dx <= kDecorationReach; dx++) {
                     const ChunkPos q{batch[i].x + dx, batch[i].z + dz};
                     const size_t at = static_cast<size_t>(std::ranges::find(wanted, q) - wanted.begin());
-                    region[(dz + 1) * 3 + dx + 1] = raws[at].get();
+                    region[DecorationSlot(dx, dz)] = raws[at].get();
                 }
-            if (!region[4])
+            const ChunkColumn* middle = region[DecorationSlot(0, 0)];
+            if (!middle)
                 continue;
-            columns[i] = region[4]->Clone();
+            columns[i] = middle->Clone();
             backend->Decorate(batch[i], region, columns[i]);
         }
     }

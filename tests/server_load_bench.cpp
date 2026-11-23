@@ -12,6 +12,7 @@
 #include "protocol/Packets.hpp"
 #include "server/Server.hpp"
 #include "world/actor/ActorManager.hpp"
+#include "world/level/block/BlockCatalog.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -316,7 +317,8 @@ int main(int argc, char** argv) {
         const int height = std::max(1, tntCount / (side * side));
         const int bx = static_cast<int>(std::floor(clients[0]->x)) + 12;
         const int bz = static_cast<int>(std::floor(clients[0]->z)) - side / 2;
-        const int by = static_cast<int>(std::floor(clients[0]->y)) - height / 2;
+        // The cube stands on the ground in front of the player (feet level and up).
+        const int by = static_cast<int>(std::floor(clients[0]->y - 1.62));
         int placed = 0;
         for (int y0 = by; y0 < by + height; y0 += 30)
             for (int x0 = bx; x0 < bx + side; x0 += 30)
@@ -329,6 +331,15 @@ int main(int argc, char** argv) {
                     placed += (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1);
                 }
         pumpAll(2, nullptr);
+        {
+            int found = 0;
+            const uint16_t tntId = BlockCatalog::Instance().DefaultBlock("minecraft:tnt");
+            for (int y = by; y < by + height; y++)
+                for (int x = bx; x < bx + side; x++)
+                    for (int z = bz; z < bz + side; z++)
+                        found += server.Chunks().GetBlock(x, y, z) == tntId;
+            placed = found;
+        }
         char light[160];
         std::snprintf(light, sizeof light, "summon tnt %d %d %d", bx + side / 2, by + height / 2, bz + side / 2);
         server.RunConsoleCommand(light);
@@ -343,9 +354,12 @@ int main(int argc, char** argv) {
             for (auto& c : clients)
                 c->Move(tick, 0.0, 0.0);
             pumpAll(1, &tnt);
+            // Primed TNT thrown into chunks nobody has loaded waits there, as in vanilla; it does
+            // not count.
             size_t primed = 0;
             for (const Mob& m : server.Mobs().All())
-                primed += m.kind == actorkind::PrimedTnt;
+                primed += m.kind == actorkind::PrimedTnt &&
+                          server.Chunks().Peek({static_cast<int>(std::floor(m.x)) >> 4, static_cast<int>(std::floor(m.z)) >> 4});
             peak = std::max(peak, primed);
             if (primed == 0 && ticks > 20)
                 break;

@@ -10,6 +10,16 @@
 
 namespace perlite {
 
+    // Decorating a chunk replays the features of the chunks around it. A neighbour's feature reads
+    // up to one chunk beyond its own, so the replay needs two rings of undecorated chunks to read
+    // exactly what the neighbour read when it was decorated itself.
+    constexpr int kDecorationReach = 2;
+    constexpr int kDecorationSide = kDecorationReach * 2 + 1;
+    constexpr int kDecorationArea = kDecorationSide * kDecorationSide;
+    constexpr int DecorationSlot(int dx, int dz) {
+        return (dz + kDecorationReach) * kDecorationSide + dx + kDecorationReach;
+    }
+
     class TerrainBackend {
     public:
         virtual ~TerrainBackend() = default;
@@ -46,7 +56,9 @@ namespace perlite {
             (void)tableIndex;
             return nullptr;
         }
-        virtual void Decorate(ChunkPos pos, const ChunkColumn* const region[9], ChunkColumn& out) const {
+        // region: the undecorated chunks kDecorationSide x kDecorationSide around pos, row by row
+        // (z, then x), pos in the middle; null where a chunk is missing.
+        virtual void Decorate(ChunkPos pos, const ChunkColumn* const region[], ChunkColumn& out) const {
             (void)pos;
             (void)region;
             (void)out;

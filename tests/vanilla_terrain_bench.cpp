@@ -40,10 +40,13 @@ int main(int argc, char** argv) {
         const auto d0 = std::chrono::steady_clock::now();
         for (int x = -radius + 1; x < radius - 1; x++)
             for (int z = -radius + 1; z < radius - 1; z++) {
-                const ChunkColumn* region[9];
-                for (int dx = -1; dx <= 1; dx++)
-                    for (int dz = -1; dz <= 1; dz++)
-                        region[(dz + 1) * 3 + (dx + 1)] = &at(x + dx, z + dz);
+                const ChunkColumn* region[kDecorationArea];
+                for (int dx = -kDecorationReach; dx <= kDecorationReach; dx++)
+                    for (int dz = -kDecorationReach; dz <= kDecorationReach; dz++) {
+                        const int nx = x + dx, nz = z + dz;
+                        region[DecorationSlot(dx, dz)] =
+                            nx >= -radius && nx < radius && nz >= -radius && nz < radius ? &at(nx, nz) : nullptr;
+                    }
                 ChunkColumn out = at(x, z).Clone();
                 backend->Decorate({x, z}, region, out);
                 decoratedCols.push_back(std::move(out));

@@ -63,6 +63,34 @@ namespace perlite {
 
     // A chunk is the same packet for every player, so it is encoded and compressed once per change
     // of the chunk and sent as its own batch (after anything already queued, to keep the order).
+    // Encodes and compresses the chunk's packet for this session's settings, unless that is done
+    // already. Touches only the entry, so different chunks can be prepared on different threads.
+    void Session::PrepareChunk(ChunkEntry& entry, ChunkPos pos) {
+        const ServerConfig& cfg = server.Config();
+        if (cfg.debugLogPackets || !cfg.debugSkipPackets.empty())
+            return;
+        const uint32_t settings = codec.SettingsKey();
+        if (entry.sealedVersion == entry.column.version && entry.sealedVersion == entry.payloadVersion &&
+            entry.sealedSettings == settings)
+            return;
+        const std::vector<uint8_t>& payload = server.World(dimension).Payload(entry);
+        proto::LevelChunkPacket lc;
+        lc.x = pos.x;
+        lc.z = pos.z;
+        lc.dimension = dimension;
+        lc.subChunkCount = static_cast<uint32_t>(RangeOf(dimension).SectionCount());
+        lc.cacheEnabled = false;
+        lc.payload = payload;
+        std::vector<uint8_t> body;
+        if (!net::EncodeChecked(lc, body))
+            return;
+        std::vector<uint8_t> content;
+        BatchCodec::AppendPacket(content, proto::LevelChunkPacket::kId, body);
+        entry.sealed = codec.Seal(content);
+        entry.sealedVersion = entry.payloadVersion;
+        entry.sealedSettings = settings;
+    }
+
     void Session::SendChunk(ChunkEntry& entry, ChunkPos pos) {
         const std::vector<uint8_t>& payload = server.World(dimension).Payload(entry);
         const auto build = [&] {

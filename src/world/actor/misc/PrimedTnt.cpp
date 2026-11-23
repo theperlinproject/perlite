@@ -18,12 +18,14 @@ namespace perlite {
         m.vz = -std::cos(angle) * 0.02;
         m.health = 1;
         m.persistent = true;
-        mobs.push_back(m);
-        Mob& added = mobs.back();
+        Mob& added = Add(m);
+        const bool sound = fuseSoundsThisTick++ < 16;
+        const Session::Encoded motion = Session::EncodeMobMotion(added, server.TickCount());
         for (Session* s : server.PlayersIn(kOverworld)) {
             s->ShowMob(added);
-            s->MobMotion(added);
-            s->PlaySound("Fuse", x, y, z);
+            s->SendEncoded(motion);
+            if (sound)
+                s->PlaySound("Fuse", x, y, z);
         }
         added.lastX = static_cast<float>(x);
         added.lastY = static_cast<float>(y);
@@ -73,7 +75,10 @@ namespace perlite {
             m.vz *= 0.7;
         }
         if (--m.fuse <= 0) {
-            Explosion(m.x, m.y + 0.0625, m.z, 4.0f, m.id, server.RuleValue("tntexplodes") != 0);
+            // Goes off with the rest of this tick's TNT (see RunBlasts).
+            float power = 4.0f;
+            if (!server.HookExplosion(m.x, m.y + 0.0625, m.z, power, m.id) && power > 0)
+                pendingBlasts.push_back(MakeBlast(m.x, m.y + 0.0625, m.z, power, m.id, server.RuleValue("tntexplodes") != 0));
             return true;
         }
         return false;

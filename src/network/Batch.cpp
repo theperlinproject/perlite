@@ -43,7 +43,10 @@ namespace perlite {
         if (content.size() >= threshold) {
             size_t packed = 0;
 
-            void* buf = tdefl_compress_mem_to_heap(content.data(), content.size(), &packed, 128);
+            // Small batches get the thorough search; big ones (chunks, a tick of thousands of entity
+            // moves) a fast greedy one: a few percent larger, several times quicker.
+            const int flags = content.size() < 8192 ? 128 : (16 | TDEFL_GREEDY_PARSING_FLAG);
+            void* buf = tdefl_compress_mem_to_heap(content.data(), content.size(), &packed, flags);
             if (buf) {
                 out.reserve(packed + 1);
                 out.push_back(0x00);

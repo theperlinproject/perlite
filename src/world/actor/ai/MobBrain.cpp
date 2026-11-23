@@ -65,9 +65,10 @@ namespace perlite {
                 m.goalY = target->Y();
                 if (m.shootCooldown > 0)
                     m.shootCooldown--;
-                else if (dist < 16.0) {
+                else if (dist <= 15.0) {
                     Shoot(m, *target);
-                    m.shootCooldown = 40 + static_cast<int>(rng() % 20);
+                    // The vanilla definition: every 3 s, every 2 s on hard.
+                    m.shootCooldown = server.Config().difficulty >= 3 ? 40 : 60;
                 }
             } else if (m.fuse < 0) {
                 m.goalX = target->X();

@@ -12,6 +12,7 @@ namespace perlite {
         double vx = 0, vy = 0, vz = 0;
         int age = 0;
         int pickupDelay = 10;
+        bool unsent = false; // moved since its position was last sent
         bool onGround = false;
         int dimension = 0;
     };

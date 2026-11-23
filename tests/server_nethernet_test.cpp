@@ -204,7 +204,8 @@ namespace {
         sockaddr_in replyTo{};
         bool haveReplyTo = false;
         // sharePort: bind port 7551 as well, like a game running on the server's machine.
-        explicit LanClient(bool sharePort = false) {
+        bool shared = false;
+        explicit LanClient(bool sharePort = false) : shared(sharePort) {
 #ifdef _WIN32
             WSADATA wsa;
             WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -270,6 +271,16 @@ namespace {
         }
         bool Discover() {
             Send(lan::kRequest, {});
+            if (shared) {
+                // The game broadcasts its search. On a shared port a unicast copy may even come
+                // back to our own socket (Linux spreads unicast over SO_REUSEPORT sockets).
+                const std::string d = lan::Encode(lan::kRequest, id, {});
+                sockaddr_in to{};
+                to.sin_family = AF_INET;
+                to.sin_port = htons(lan::kPort);
+                to.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+                ::sendto(sock, d.data(), static_cast<int>(d.size()), 0, reinterpret_cast<sockaddr*>(&to), sizeof(to));
+            }
             uint16_t type = 0;
             std::string body;
             while (Receive(type, body, 2000))
@@ -278,6 +289,38 @@ namespace {
             return false;
         }
     };
+
+    // Whether a broadcast sent from this host is delivered back to a socket on this host.
+    bool BroadcastLoopsBack() {
+#ifdef _WIN32
+        using Sock = SOCKET;
+        const auto closeSock = [](Sock s) { closesocket(s); };
+#else
+        using Sock = int;
+        const auto closeSock = [](Sock s) { ::close(s); };
+#endif
+        Sock rx = ::socket(AF_INET, SOCK_DGRAM, 0), tx = ::socket(AF_INET, SOCK_DGRAM, 0);
+        int yes = 1;
+        ::setsockopt(tx, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&yes), sizeof(yes));
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_ANY);
+        ::bind(rx, reinterpret_cast<sockaddr*>(&a), sizeof(a));
+        socklen_t len = sizeof(a);
+        ::getsockname(rx, reinterpret_cast<sockaddr*>(&a), &len);
+        sockaddr_in to{};
+        to.sin_family = AF_INET;
+        to.sin_port = a.sin_port;
+        to.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+        bool got = false;
+        for (int attempt = 0; attempt < 3 && !got; attempt++) {
+            ::sendto(tx, "ping", 4, 0, reinterpret_cast<sockaddr*>(&to), sizeof(to));
+            got = LanClient::Poll(rx, 300) > 0;
+        }
+        closeSock(rx);
+        closeSock(tx);
+        return got;
+    }
 
     struct Outcome {
         bool connected = false;
@@ -600,10 +643,16 @@ int main() {
         const Outcome viaLan =
             JoinOver(kPort, guest.Identity(guest.Chain(false), 2), guest.ClientToken(), nullptr, true, true);
         CHECK(viaLan.connected && viaLan.loginSuccess && viaLan.spawned);
-        // The same from a game on this machine, which listens on port 7551 too.
-        const Outcome sameMachine =
-            JoinOver(kPort, guest.Identity(guest.Chain(false), 2), guest.ClientToken(), nullptr, true, true, true);
-        CHECK(sameMachine.connected && sameMachine.loginSuccess && sameMachine.spawned);
+        // The same from a game on this machine, which listens on port 7551 too. On a shared port the
+        // system may hand a unicast datagram to either socket, and only broadcasts reach both, so
+        // this needs broadcasts to come back to this host (some CI containers drop them).
+        if (BroadcastLoopsBack()) {
+            const Outcome sameMachine =
+                JoinOver(kPort, guest.Identity(guest.Chain(false), 2), guest.ClientToken(), nullptr, true, true, true);
+            CHECK(sameMachine.connected && sameMachine.loginSuccess && sameMachine.spawned);
+        } else {
+            std::puts("server_nethernet_test: broadcasts do not reach this host, skipping the same-machine LAN join");
+        }
     }
     open.RequestStop();
     ticker.join();

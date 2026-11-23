@@ -104,6 +104,9 @@ namespace perlite {
     bool Server::UseItemOn(Session& by, int dimension, int x, int y, int z, int face, const CatalogItem& item) {
         if (face < 0 || face > 5)
             return false;
+        if (item.name == "minecraft:bucket" || (item.name.ends_with("_bucket") && item.name != "minecraft:milk_bucket" &&
+                                                 item.name != "minecraft:powder_snow_bucket"))
+            return UseBucket(by, item.name, true, x, y, z, face);
         if ((item.name == "minecraft:flint_and_steel" || item.name == "minecraft:fire_charge") && dimension == kOverworld &&
             NameOf(BlockAt(dimension, x, y, z)) == "minecraft:tnt") {
             ApplyBlock(dimension, x, y, z, BlockRegistry::kAir);
