@@ -30,12 +30,10 @@ namespace perlite {
                 return {};
             if (n == "tnt")
                 return {15, 100};
-            if (n.ends_with("_planks") || n.ends_with("_slab") && (has("oak") || has("spruce") || has("birch") ||
-                                                                      has("jungle") || has("acacia") || has("mangrove") ||
-                                                                      has("cherry") || has("bamboo")) ||
-                n.ends_with("_stairs") && (has("oak") || has("spruce") || has("birch") || has("jungle") ||
-                                          has("acacia") || has("mangrove") || has("cherry") || has("bamboo")) ||
-                (n.ends_with("_fence") || n.ends_with("_fence_gate")) && !has("nether"))
+            const bool wood = has("oak") || has("spruce") || has("birch") || has("jungle") || has("acacia") || has("mangrove") ||
+                              has("cherry") || has("bamboo");
+            if (n.ends_with("_planks") || (n.ends_with("_slab") && wood) || (n.ends_with("_stairs") && wood) ||
+                ((n.ends_with("_fence") || n.ends_with("_fence_gate")) && !has("nether")))
                 return {5, 20};
             if (n.ends_with("_log") || n.ends_with("_wood") || n == "bamboo_block" || n.starts_with("stripped_"))
                 return {5, 5};

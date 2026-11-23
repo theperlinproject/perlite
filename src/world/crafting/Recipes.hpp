@@ -19,6 +19,8 @@ namespace perlite {
         int16_t outputId = 0;
         int outputCount = 1;
         int outputData = 0;
+        std::string block = "crafting_table"; // the station: crafting_table, stonecutter, smithing_table
+        bool smithing = false;                // input is template, base, addition; the base's data carries over
     };
 
     struct SmeltRecipe {
@@ -33,6 +35,8 @@ namespace perlite {
     public:
         static Recipes& Instance();
         void Load();
+        // The vanilla behavior pack whose recipes folder adds the station recipes (read by Load).
+        void SetPackDir(const std::string& dir) { packDir = dir; }
         const CraftRecipe* ByNetId(uint32_t id) const;
         const SmeltRecipe* Smelt(const std::string& item, int station) const;
         const std::vector<CraftRecipe>& Crafting() const { return crafting; }
@@ -42,6 +46,8 @@ namespace perlite {
 
     private:
         bool loaded = false;
+        std::string packDir;
+        void LoadPackRecipes();
         std::vector<CraftRecipe> crafting;
         std::vector<SmeltRecipe> smelting;
         std::vector<uint8_t> body;

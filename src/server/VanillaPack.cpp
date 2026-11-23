@@ -16,14 +16,16 @@ namespace perlite::vanillapack {
     namespace fs = std::filesystem;
 
     namespace {
-        // The folders Perlite reads: mob data and block shapes.
-        constexpr const char* kFolders[] = {"entities", "shapes"};
+        // The folders Perlite reads: mob data, block shapes, and the recipes of the stations the
+        // built-in recipe list lacks (stonecutter, smithing table, campfire).
+        constexpr const char* kFolders[] = {"entities", "shapes", "recipes"};
         constexpr const char* kMarker = ".source";
 
         bool Complete(const fs::path& dir) {
             std::error_code ec;
+            // The recipes are optional (packs from before they were read still work).
             for (const char* f : kFolders)
-                if (!fs::is_directory(dir / f, ec))
+                if (std::string_view(f) != "recipes" && !fs::is_directory(dir / f, ec))
                     return false;
             return true;
         }
@@ -119,7 +121,7 @@ namespace perlite::vanillapack {
             }
             {
                 std::ofstream m(part / kMarker);
-                m << kRepository << " " << kRef << "\n";
+                m << kRepository << " " << kRef << " +recipes\n";
             }
             fs::remove_all(target, ec);
             fs::rename(part, target, ec);
@@ -143,7 +145,7 @@ namespace perlite::vanillapack {
             LogWarn(std::string("PERLITE_VANILLA_PACK=") + env + " has no entities and shapes folders; ignoring it");
         }
         const fs::path dir = fs::path(dataDir.empty() ? "." : dataDir) / "vanilla_behavior_pack";
-        const std::string want = std::string(kRepository) + " " + kRef;
+        const std::string want = std::string(kRepository) + " " + kRef + " +recipes";
         const bool have = Complete(dir);
         if (have && Marker(dir) == want)
             return dir.string();
@@ -260,7 +262,7 @@ namespace perlite::vanillapack {
             return {};
         }
         size_t kept = 0;
-        if (!ExtractStructures(zip.body, dir, kept, error)) {
+        if (!ExtractStructures(zip.body, dir.string(), kept, error)) {
             LogWarn("Could not keep the structures from the Bedrock Dedicated Server download: " + error);
             return {};
         }

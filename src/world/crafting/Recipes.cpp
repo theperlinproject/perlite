@@ -1,4 +1,8 @@
 #include "world/crafting/Recipes.hpp"
+#include "common/Log.hpp"
+#include "common/Json.hpp"
+#include <fstream>
+#include <filesystem>
 
 #include "world/level/block/BlockCatalog.hpp"
 
@@ -177,6 +181,7 @@ namespace perlite {
                     smelting.push_back(std::move(s));
             }
         }
+        LoadPackRecipes();
         proto::CraftingDataPacket p;
         std::mt19937_64 rng(42);
         const auto ingredient = [](const RecipeIngredient& in) {
@@ -198,6 +203,19 @@ namespace perlite {
             return r;
         };
         for (const CraftRecipe& r : crafting) {
+            if (r.smithing) {
+                proto::SmithingTransformRecipe t;
+                t.recipeId = "minecraft:" + r.output + "_smithing_" + std::to_string(r.netId);
+                t.template_ = ingredient(r.input[0]);
+                t.base = ingredient(r.input[1]);
+                t.addition = ingredient(r.input[2]);
+                t.result.networkId = r.outputId;
+                t.result.count = 1;
+                t.tag = "smithing_table";
+                t.networkId = r.netId;
+                p.smithingTransformRecipes.push_back(std::move(t));
+                continue;
+            }
             proto::ItemLegacy out;
             out.networkId = r.outputId;
             out.count = static_cast<uint16_t>(r.outputCount);
@@ -216,7 +234,7 @@ namespace perlite {
                     s.input.push_back(ingredient(in));
                 s.output.push_back(out);
                 s.uuid = uuid;
-                s.block = "crafting_table";
+                s.block = r.block;
                 s.networkId = r.netId;
                 p.shapedRecipes.push_back(std::move(s));
             } else {
@@ -226,13 +244,103 @@ namespace perlite {
                     s.input.push_back(ingredient(in));
                 s.output.push_back(out);
                 s.uuid = uuid;
-                s.block = "crafting_table";
+                s.block = r.block;
                 s.networkId = r.netId;
                 p.shapelessRecipes.push_back(std::move(s));
             }
         }
         p.clearRecipes = true;
         net::EncodeChecked(p, body);
+    }
+
+    // The station recipes of the vanilla behavior pack: stonecutter and smithing table recipes,
+    // and the cooking stations (smoker, campfire) of furnace recipes the built-in list lacks.
+    void Recipes::LoadPackRecipes() {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::path dir = fs::path(packDir) / "recipes";
+        if (packDir.empty() || !fs::is_directory(dir, ec))
+            return;
+        const auto bare = [](std::string s) { return s.starts_with("minecraft:") ? s.substr(10) : s; };
+        const auto itemOf = [&](const json::Value& v) {
+            if (v.IsString())
+                return bare(v.String());
+            if (const std::string tag = v["tag"].String(); !tag.empty())
+                return "#" + bare(tag);
+            return bare(v["item"].String());
+        };
+        size_t added = 0;
+        std::vector<fs::path> files;
+        for (const auto& e : fs::recursive_directory_iterator(dir, ec))
+            if (e.is_regular_file() && e.path().extension() == ".json")
+                files.push_back(e.path());
+        std::ranges::sort(files);
+        for (const fs::path& file : files) {
+            std::ifstream in(file);
+            std::stringstream text;
+            text << in.rdbuf();
+            json::Value doc;
+            if (!json::Parse(text.str(), doc))
+                continue;
+            for (const auto& [kind, body] : doc.members) {
+                std::vector<std::string> tags;
+                for (const json::Value& t : body["tags"].items)
+                    tags.push_back(t.String());
+                const auto has = [&](const char* t) { return std::ranges::find(tags, t) != tags.end(); };
+                if (kind == "minecraft:recipe_shapeless" && has("stonecutter")) {
+                    CraftRecipe r;
+                    r.block = "stonecutter";
+                    for (const json::Value& i : body["ingredients"].items)
+                        r.input.push_back({itemOf(i), 1});
+                    const json::Value& result = body["result"];
+                    r.output = itemOf(result);
+                    r.outputCount = std::max<int>(1, static_cast<int>(result["count"].Int(1)));
+                    r.outputId = ItemId(r.output);
+                    if (r.input.size() != 1 || !r.outputId)
+                        continue;
+                    r.netId = static_cast<uint32_t>(crafting.size() + 1);
+                    crafting.push_back(std::move(r));
+                    added++;
+                } else if (kind == "minecraft:recipe_smithing_transform") {
+                    CraftRecipe r;
+                    r.block = "smithing_table";
+                    r.smithing = true;
+                    r.input = {{itemOf(body["template"]), 1}, {itemOf(body["base"]), 1}, {itemOf(body["addition"]), 1}};
+                    r.output = itemOf(body["result"]);
+                    r.outputId = ItemId(r.output);
+                    if (!r.outputId)
+                        continue;
+                    r.netId = static_cast<uint32_t>(crafting.size() + 1);
+                    crafting.push_back(std::move(r));
+                    added++;
+                } else if (kind == "minecraft:recipe_furnace") {
+                    const std::string input = itemOf(body["input"]), output = itemOf(body["output"]);
+                    bool known = false;
+                    for (SmeltRecipe& s : smelting)
+                        if (s.input == input) {
+                            known = true;
+                            s.smoker |= has("smoker");
+                            s.campfire |= has("campfire") || has("soul_campfire");
+                            s.blast |= has("blast_furnace");
+                        }
+                    if (!known) {
+                        SmeltRecipe s;
+                        s.input = input;
+                        s.output = output;
+                        s.outputId = ItemId(output);
+                        s.furnace = has("furnace");
+                        s.blast = has("blast_furnace");
+                        s.smoker = has("smoker");
+                        s.campfire = has("campfire") || has("soul_campfire");
+                        if (s.outputId) {
+                            smelting.push_back(std::move(s));
+                            added++;
+                        }
+                    }
+                }
+            }
+        }
+        LogInfo("Vanilla behavior pack: " + std::to_string(added) + " station recipes");
     }
 
     const CraftRecipe* Recipes::ByNetId(uint32_t id) const {

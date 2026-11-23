@@ -104,7 +104,23 @@ namespace perlite {
         case Container::CreativeOutput:
             return &output;
         case Container::CraftingInput:
-            return slot >= 28 && slot < 41 ? &craft[static_cast<size_t>(slot - 28)] : nullptr;
+        case Container::StonecutterInput:
+        case Container::SmithingTableInput:
+        case Container::SmithingTableMaterial:
+        case Container::SmithingTableTemplate:
+        case Container::AnvilInput:
+        case Container::AnvilMaterial:
+        case Container::GrindstoneInput:
+        case Container::GrindstoneAdditional:
+        case Container::LoomInput:
+        case Container::LoomDye:
+        case Container::LoomMaterial:
+        case Container::CartographyInput:
+        case Container::CartographyAdditional:
+        case Container::EnchantingInput:
+        case Container::EnchantingLapis:
+        case Container::BeaconPayment:
+            return slot >= 0 && slot < static_cast<int>(craft.size()) ? &craft[static_cast<size_t>(slot)] : nullptr;
         case Container::Container:
         case Container::Barrel:
         case Container::Shulker:
@@ -500,6 +516,34 @@ namespace perlite {
                     return result;
                 craftTimes = std::max<int>(1, a.timesCrafted);
                 work.output = work.MakeStack(crafted->outputId, crafted->outputCount * craftTimes);
+                if (crafted->smithing && !work.craft[51].Empty()) {
+                    // The upgraded item keeps the base's wear and enchantments.
+                    work.output.damage = work.craft[51].damage;
+                    work.output.enchants = work.craft[51].enchants;
+                }
+                break;
+            }
+            case Action::CraftGrindstoneRequest: {
+                // The grindstone takes the enchantments off (curses stay) and joins two of the same item.
+                const ItemStack& a1 = work.craft[16];
+                const ItemStack& a2 = work.craft[17];
+                const ItemStack& from = a1.Empty() ? a2 : a1;
+                if (from.Empty())
+                    return result;
+                work.output = work.MakeStack(from.networkId, 1);
+                work.output.damage = from.damage;
+                if (!a1.Empty() && !a2.Empty() && a1.networkId == a2.networkId)
+                    work.output.damage = static_cast<uint16_t>(std::max(0, static_cast<int>(a1.damage) + static_cast<int>(a2.damage) - 1000));
+                for (const auto& e : from.enchants)
+                    if (e.first == 27 || e.first == 28) // binding, vanishing
+                        work.output.enchants.push_back(e);
+                break;
+            }
+            case Action::CraftLoomRequest: {
+                const ItemStack& banner = work.craft[9];
+                if (banner.Empty())
+                    return result;
+                work.output = work.MakeStack(banner.networkId, 1);
                 break;
             }
             case Action::Consume: {
@@ -515,7 +559,32 @@ namespace perlite {
                 note(a.source);
                 break;
             }
-            case Action::Optional:
+            case Action::Optional: {
+                // The anvil: the item with the material's enchantments added (a book or the same item),
+                // the material's durability repairing it.
+                const ItemStack& item = work.craft[1];
+                const ItemStack& material = work.craft[2];
+                if (item.Empty())
+                    return result;
+                work.output = work.MakeStack(item.networkId, 1);
+                work.output.damage = item.damage;
+                work.output.enchants = item.enchants;
+                if (!material.Empty()) {
+                    if (material.networkId == item.networkId)
+                        work.output.damage = static_cast<uint16_t>(std::max(0, static_cast<int>(item.damage) - 100));
+                    for (const auto& [id, level] : material.enchants) {
+                        bool merged = false;
+                        for (auto& [eid, elevel] : work.output.enchants)
+                            if (eid == id) {
+                                elevel = elevel == level ? static_cast<int16_t>(level + 1) : std::max(elevel, level);
+                                merged = true;
+                            }
+                        if (!merged)
+                            work.output.enchants.push_back({id, level});
+                    }
+                }
+                break;
+            }
             case Action::NonImplemented:
             case Action::ResultsDeprecated:
                 break;

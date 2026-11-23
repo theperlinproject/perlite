@@ -595,7 +595,7 @@ int main(int argc, char** argv) {
                     CHECK(log && planks && netId);
                     if (a && log && planks && netId) {
                         a->Inventory().main[5] = ItemStack{};
-                        a->Inventory().craft[0] = a->Inventory().MakeStack(log->networkId, 1);
+                        a->Inventory().craft[28] = a->Inventory().MakeStack(log->networkId, 1);
                         proto::ItemStackRequest req;
                         req.requestId = -77;
                         proto::ItemStackRequestActionsEntry craft;
@@ -619,7 +619,7 @@ int main(int argc, char** argv) {
                         req.actions.push_back(take);
                         const RequestResult rr = ApplyStackRequest(a->Inventory(), req, false);
                         CHECK(rr.ok && a->Inventory().main[5].networkId == planks->networkId && a->Inventory().main[5].count == 4);
-                        CHECK(a->Inventory().craft[0].Empty());
+                        CHECK(a->Inventory().craft[28].Empty());
                     }
                 }
                 if (Session* a = server.FindByName("Alice")) {

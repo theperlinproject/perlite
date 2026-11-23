@@ -46,7 +46,7 @@ namespace perlite {
         ItemStack offhand;
         ItemStack cursor;
         ItemStack output;
-        std::array<ItemStack, 13> craft;
+        std::array<ItemStack, 54> craft; // the ui slots: crafting grid 28..40, station inputs (anvil 1, loom 9, grindstone 16, smithing 51..53, ...)
         std::vector<ItemStack> container;
         int containerKind = -1;
         int selected = 0;

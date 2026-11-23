@@ -138,6 +138,7 @@ namespace perlite {
                 // Mob sizes, scale, health and speed, and the block shapes, come from Mojang's vanilla
                 // behavior pack, downloaded on first start (it is not shipped with Perlite).
                 const std::string pack = vanillapack::Ensure(config.dataDir, config.downloadVanillaPack);
+                Recipes::Instance().SetPackDir(pack);
                 const size_t read = VanillaEntities::Instance().Load(pack);
                 if (read > 0) {
                     const size_t matched = MobRegistry::Instance().ApplyVanilla(VanillaEntities::Instance());

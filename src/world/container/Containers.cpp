@@ -43,6 +43,20 @@ namespace perlite {
                 return proto::WindowType::Smoker;
             case 5:
                 return proto::WindowType::Workbench;
+            case 6:
+                return proto::WindowType::Stonecutter;
+            case 7:
+                return proto::WindowType::SmithingTable;
+            case 8:
+                return proto::WindowType::Grindstone;
+            case 9:
+                return proto::WindowType::Loom;
+            case 10:
+                return proto::WindowType::Cartography;
+            case 11:
+                return proto::WindowType::Anvil;
+            case 12:
+                return proto::WindowType::Enchantment;
             default:
                 return proto::WindowType::Container;
             }
@@ -68,6 +82,21 @@ namespace perlite {
             return 4;
         if (n == "crafting_table")
             return 5;
+        // The stations whose slots are the player's own ui slots (nothing kept in the block).
+        if (n == "stonecutter_block" || n == "stonecutter")
+            return 6;
+        if (n == "smithing_table")
+            return 7;
+        if (n == "grindstone")
+            return 8;
+        if (n == "loom")
+            return 9;
+        if (n == "cartography_table")
+            return 10;
+        if (n == "anvil" || n == "chipped_anvil" || n == "damaged_anvil")
+            return 11;
+        if (n == "enchanting_table")
+            return 12;
         return -1;
     }
 
@@ -89,7 +118,7 @@ namespace perlite {
         CloseContainer(by);
         static int windowCounter = 0;
         const int window = 1 + (windowCounter++ % 99);
-        if (kind == 5) {
+        if (kind >= 5) {
             by.Inventory().containerKind = -1;
             by.Inventory().container.clear();
             by.OpenWindow(window, WindowOf(kind), x, y, z);

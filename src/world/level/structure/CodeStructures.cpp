@@ -873,6 +873,8 @@ namespace perlite::structure {
                     out.Set(x, y, z, b);
             }
         };
+        constexpr std::pair<int, int> kSides4[4] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        constexpr std::pair<int, int> kCorners4[4] = {{1, 1}, {-1, 1}, {1, -1}, {-1, -1}};
         uint16_t Bk(const char* name) { return BlockCatalog::Instance().DefaultBlock(name); }
         bool Solid(uint16_t b) {
             if (b == BlockRegistry::kAir)
@@ -924,7 +926,7 @@ namespace perlite::structure {
                 for (int tries = 0; tries < 3; tries++) {
                     const int qx = cx + r.NextInt(xr * 2 + 1) - xr, qz = cz + r.NextInt(zr * 2 + 1) - zr;
                     int walls = 0;
-                    for (const auto& d : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}})
+                    for (const auto& d : kSides4)
                         walls += Solid(v.Get(qx + d.first, cy, qz + d.second));
                     if (walls == 1 && v.Get(qx, cy, qz) == air) {
                         v.Set(qx, cy, qz, chest);
@@ -949,9 +951,9 @@ namespace perlite::structure {
                             v.Set(wx + dx, top, wz + dz, sandstone);
                     }
                 v.Set(wx, top - 1, wz, water);
-                for (const auto& d : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}})
+                for (const auto& d : kSides4)
                     v.Set(wx + d.first, top - 1, wz + d.second, water);
-                for (const auto& d : {std::pair{1, 1}, {-1, 1}, {1, -1}, {-1, -1}})
+                for (const auto& d : kCorners4)
                     for (int h = 0; h < 3; h++)
                         v.Set(wx + d.first, top + h, wz + d.second, sandstone);
                 for (int dx = -1; dx <= 1; dx++)
