@@ -92,6 +92,8 @@ namespace perlite {
         void HideItem(uint64_t id);
         void PlaySound(const std::string& sound, double x, double y, double z, int extra = -1);
         void SendLevelEvent(int event, double x, double y, double z, int data = 0);
+        void SendBlockEvent(int x, int y, int z, int type, int data);
+        void PunchBlock(int x, int y, int z, int face);
         void MoveItem(const ItemEntity& item);
         void TakeItem(uint64_t itemId, uint64_t takerRuntimeId);
         void ShowMob(const Mob& mob);
@@ -113,6 +115,7 @@ namespace perlite {
         // The boss bar of an entity: type 0 show, 2 hide, 4 health (progress 0..1).
         void BossBar(uint64_t entity, int type, const std::string& title, float progress);
         void ShowCredits();
+        void SendEnchantOffers();
         // A message to this player's client mods on a mod channel (rides on a script message).
         void SendModChannel(const std::string& channel, const std::string& body);
         bool contentClient = false; // a client mod for content said hello
@@ -401,6 +404,7 @@ namespace perlite {
             int x = 0, y = 0, z = 0;
             double speed = 0;
             double progress = 0;
+            int punches = 0;
         } breaking;
 
         double posX = 0.5, posY = 0, posZ = 0.5;

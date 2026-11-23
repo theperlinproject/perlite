@@ -20,7 +20,8 @@ namespace perlite {
         int outputCount = 1;
         int outputData = 0;
         std::string block = "crafting_table"; // the station: crafting_table, stonecutter, smithing_table
-        bool smithing = false;                // input is template, base, addition; the base's data carries over
+        bool smithing = false;
+        bool trim = false; // an armour trim: the result is the base with the trim of the template and material                // input is template, base, addition; the base's data carries over
     };
 
     struct SmeltRecipe {

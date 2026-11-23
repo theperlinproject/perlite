@@ -13,8 +13,34 @@ namespace perlite {
         item.SetShort("Damage", static_cast<int16_t>(stack.damage));
         item.SetByte("Slot", static_cast<int8_t>(slot));
         item.SetByte("WasPickedUp", 0);
-        if (!stack.enchants.empty()) {
+        if (stack.meta)
+            item.SetShort("Meta", static_cast<int16_t>(stack.meta));
+        if (!stack.enchants.empty() || !stack.name.empty() || stack.repairCost > 0 || !stack.patterns.empty() || !stack.trimPattern.empty()) {
             nbt::Value tag = nbt::Value::Make(nbt::Compound);
+            if (!stack.name.empty()) {
+                nbt::Value display = nbt::Value::Make(nbt::Compound);
+                display.SetString("Name", stack.name);
+                tag.Set("display", std::move(display));
+            }
+            if (stack.repairCost > 0)
+                tag.SetInt("RepairCost", stack.repairCost);
+            if (!stack.patterns.empty()) {
+                nbt::Value list = nbt::Value::Make(nbt::List);
+                list.listType = nbt::Compound;
+                for (const auto& [code, color] : stack.patterns) {
+                    nbt::Value e = nbt::Value::Make(nbt::Compound);
+                    e.SetString("Pattern", code);
+                    e.SetInt("Color", color);
+                    list.list.push_back(std::move(e));
+                }
+                tag.Set("Patterns", std::move(list));
+            }
+            if (!stack.trimPattern.empty()) {
+                nbt::Value trim = nbt::Value::Make(nbt::Compound);
+                trim.SetString("Material", stack.trimMaterial);
+                trim.SetString("Pattern", stack.trimPattern);
+                tag.Set("Trim", std::move(trim));
+            }
             nbt::Value ench = nbt::Value::Make(nbt::List);
             ench.listType = nbt::Compound;
             for (const auto& [id, level] : stack.enchants) {
@@ -23,7 +49,8 @@ namespace perlite {
                 e.SetShort("lvl", level);
                 ench.list.push_back(std::move(e));
             }
-            tag.Set("ench", std::move(ench));
+            if (!stack.enchants.empty())
+                tag.Set("ench", std::move(ench));
             item.Set("tag", std::move(tag));
         }
         return item;
@@ -42,11 +69,23 @@ namespace perlite {
         out.count = static_cast<uint16_t>(std::min(count, MaxStack(catalog->networkId)));
         out.stackId = stackIds ? stackIds->NewStackId() : 0;
         out.damage = static_cast<uint16_t>(tag.Int("Damage", 0));
-        if (const nbt::Value* extra = tag.Find("tag"))
+        out.meta = static_cast<uint16_t>(tag.Int("Meta", 0));
+        if (const nbt::Value* extra = tag.Find("tag")) {
             if (const nbt::Value* ench = extra->Find("ench"))
                 for (const nbt::Value& e : ench->list)
                     out.enchants.emplace_back(static_cast<int16_t>(e.Int("id")),
                                               static_cast<int16_t>(e.Int("lvl")));
+            if (const nbt::Value* display = extra->Find("display"))
+                out.name = display->String("Name");
+            out.repairCost = static_cast<int32_t>(extra->Int("RepairCost", 0));
+            if (const nbt::Value* patterns = extra->Find("Patterns"))
+                for (const nbt::Value& e : patterns->list)
+                    out.patterns.emplace_back(e.String("Pattern"), static_cast<int32_t>(e.Int("Color")));
+            if (const nbt::Value* trim = extra->Find("Trim")) {
+                out.trimMaterial = trim->String("Material");
+                out.trimPattern = trim->String("Pattern");
+            }
+        }
         return true;
     }
 

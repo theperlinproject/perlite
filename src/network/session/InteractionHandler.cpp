@@ -377,6 +377,7 @@ namespace perlite {
         }
         const std::string n = ItemNameOf(held.networkId);
         const FoodInfo* f = FoodOf(n);
+        const uint16_t potion = held.meta;
         StopUsing();
         if (!f)
             return;
@@ -392,7 +393,24 @@ namespace perlite {
             saturation = std::min(static_cast<float>(food), saturation + f->saturation);
         }
         const std::string bare = n.substr(n.find(':') + 1);
-        if (bare == "golden_apple") {
+        if (bare == "potion") {
+            // The potion's effects, by its type (Bedrock potion ids, the game's durations).
+            struct P {
+                int meta, effect, amp, ticks;
+            };
+            static const P kPotions[] = {
+                {5, 16, 0, 3600},  {6, 16, 0, 9600},  {7, 14, 0, 3600},  {8, 14, 0, 9600},  {9, 8, 0, 3600},   {10, 8, 0, 9600},
+                {11, 8, 1, 1800},  {12, 12, 0, 3600}, {13, 12, 0, 9600}, {14, 1, 0, 3600},  {15, 1, 0, 9600},  {16, 1, 1, 1800},
+                {17, 2, 0, 1800},  {18, 2, 0, 4800},  {42, 2, 3, 400},   {19, 13, 0, 3600}, {20, 13, 0, 9600}, {21, 6, 0, 1},
+                {22, 6, 1, 1},     {23, 7, 0, 1},     {24, 7, 1, 1},     {25, 19, 0, 900},  {26, 19, 0, 2400}, {27, 19, 1, 432},
+                {28, 10, 0, 900},  {29, 10, 0, 2400}, {30, 10, 1, 450},  {31, 5, 0, 3600},  {32, 5, 0, 9600},  {33, 5, 1, 1800},
+                {34, 18, 0, 1800}, {35, 18, 0, 4800}, {36, 20, 1, 800},  {37, 2, 3, 400},   {37, 11, 2, 400},  {38, 2, 3, 800},
+                {38, 11, 2, 800},  {39, 2, 5, 400},   {39, 11, 3, 400},  {40, 27, 0, 1800}, {41, 27, 0, 4800}, {43, 32, 0, 3600},
+                {44, 33, 0, 3600}, {45, 34, 0, 3600}, {46, 35, 0, 3600}};
+            for (const P& e : kPotions)
+                if (e.meta == potion)
+                    AddEffect(e.effect, e.amp, e.ticks);
+        } else if (bare == "golden_apple") {
             AddEffect(10, 1, 100);
             AddEffect(22, 0, 2400);
         } else if (bare == "enchanted_golden_apple" || bare == "appleEnchanted") {

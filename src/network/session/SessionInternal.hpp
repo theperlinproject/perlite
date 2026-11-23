@@ -178,6 +178,7 @@ namespace perlite {
         inline const FoodInfo* FoodOf(const std::string& fullName) {
             static const std::unordered_map<std::string, FoodInfo> foods = {
                 {"apple", {4, 2.4f, false, 32, nullptr}},
+                {"potion", {0, 0.0f, true, 32, "minecraft:glass_bottle"}},
                 {"baked_potato", {5, 6.0f, false, 32, nullptr}},
                 {"beef", {3, 1.8f, false, 32, nullptr}},
                 {"beetroot", {1, 1.2f, false, 32, nullptr}},
@@ -330,6 +331,17 @@ namespace perlite {
                 else
                     inner.template emplace<7>(proto::Vec3I{static_cast<int32_t>(std::floor(mob.x)), static_cast<int32_t>(std::floor(mob.y)),
                                                            static_cast<int32_t>(std::floor(mob.z))});
+                out.push_back(target);
+            }
+            if (mob.kind == actorkind::Mob) {
+                // Who the mob is after: the client poses on it (a skeleton draws its bow, a
+                // pillager raises its crossbow, a guardian aims its beam). 0 = no target.
+                proto::MetadataDictionaryEntry target;
+                target.key = proto::MetadataDictionaryEntryKey::TargetEid;
+                target.type = proto::MetadataDictionaryEntryType::Long;
+                target.legacyType = static_cast<uint8_t>(target.type);
+                auto& inner = target.value.template emplace<4>();
+                inner.template emplace<8>(static_cast<int64_t>(mob.target));
                 out.push_back(target);
             }
             if (mob.kind == actorkind::Projectile && mob.owner != 0) {

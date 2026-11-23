@@ -109,6 +109,7 @@ namespace perlite {
         uint64_t version = 0;
 
         void EncodeNetwork(std::vector<uint8_t>& out, int dimension = kOverworld) const;
+        void AppendBlockActors(std::vector<uint8_t>& out, int chunkX, int chunkZ, int dimension = kOverworld) const;
 
     private:
         std::array<Section, kSections> sections;

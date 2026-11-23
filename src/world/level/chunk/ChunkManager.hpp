@@ -49,7 +49,7 @@ namespace perlite {
         void Pump();
         std::vector<ChunkPos> TakeReady() { return std::exchange(ready, {}); }
 
-        const std::vector<uint8_t>& Payload(ChunkEntry& entry) const;
+        const std::vector<uint8_t>& Payload(ChunkEntry& entry, ChunkPos pos) const;
 
         uint16_t GetBlock(int x, int y, int z) const;
         // The loaded column of a chunk, or null.

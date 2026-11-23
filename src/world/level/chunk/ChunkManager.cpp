@@ -343,10 +343,11 @@ namespace perlite {
         return queue.size() + done.size();
     }
 
-    const std::vector<uint8_t>& ChunkManager::Payload(ChunkEntry& entry) const {
+    const std::vector<uint8_t>& ChunkManager::Payload(ChunkEntry& entry, ChunkPos pos) const {
         if (entry.payloadVersion != entry.column.version) {
             entry.payload.clear();
             entry.column.EncodeNetwork(entry.payload, dimension);
+            entry.column.AppendBlockActors(entry.payload, pos.x, pos.z, dimension);
             entry.payloadVersion = entry.column.version;
         }
         return entry.payload;

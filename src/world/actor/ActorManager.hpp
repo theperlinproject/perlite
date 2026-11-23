@@ -47,6 +47,8 @@ namespace perlite {
         double goalX = 0, goalY = 0, goalZ = 0;
         bool hasGoal = false;
         uint64_t target = 0;
+        int unseenTicks = 0; // how long the target has been out of sight
+        bool sees = false;   // the last sight check on the target
         bool angry = false;
         bool onGround = false;
         bool inWater = false;
@@ -67,6 +69,7 @@ namespace perlite {
         int lastAttackerTicks = 0;
         float lastX = 0, lastY = 0, lastZ = 0, lastYaw = 0, lastHead = 0;
         uint64_t lastFlags = 0;
+        uint64_t lastTarget = 0;
         int size = -1;    // index into the type's size classes (slime, magma cube); -1 when it has none
         int variant = -1; // the "variant" sent to clients (slime size, rabbit coat); -1 sends none
         float maxHealth = 0;  // 0: the type's health
@@ -151,6 +154,8 @@ namespace perlite {
         void NaturalSpawns();
         void SpawnPack(const std::string& category, int x, int z, int surfaceY, bool chunkGen);
         bool Solid(double x, double y, double z) const;
+        // Whether the mob's eyes see a point (no full block between), as must_see targeting needs.
+        bool CanSee(const Mob& m, double x, double y, double z) const;
         bool Collides(const Mob& m, double x, double y, double z) const;
         int SurfaceY(int x, int z) const;
         bool Dark(int x, int y, int z) const;

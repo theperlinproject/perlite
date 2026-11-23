@@ -64,6 +64,27 @@ int main() {
     CHECK(fight.CrystalsAlive() == 10);
     const auto name = [&](int x, int y, int z) { return BlockRegistry::Instance().Name(server.BlockAt(kEnd, x, y, z)); };
     CHECK(name(0, py, 0) == "minecraft:bedrock");
+    // The cages on the two smallest pillars: each bar joins the bars beside it, as the game's do.
+    for (const theend::Spike& sp : theend::Spikes(config.seed)) {
+        if (!sp.guarded)
+            continue;
+        const auto bit = [&](int x, int y, int z, const char* key) {
+            for (const auto& [k, v] : BlockRegistry::Instance().States(server.BlockAt(kEnd, x, y, z)))
+                if (k == key) {
+                    if (const bool* b = std::get_if<bool>(&v))
+                        return *b ? 1 : 0;
+                    if (const int32_t* i = std::get_if<int32_t>(&v))
+                        return *i;
+                }
+            return -1;
+        };
+        const int bx = sp.x - 2, by = sp.height + 1, bz = sp.z;
+        CHECK(name(bx, by, bz) == "minecraft:iron_bars");
+        CHECK(bit(bx, by, bz, "minecraft:connection_north") == 1 && bit(bx, by, bz, "minecraft:connection_south") == 1 &&
+              bit(bx, by, bz, "minecraft:connection_east") == 0 && bit(bx, by, bz, "minecraft:connection_west") == 0);
+        CHECK(bit(sp.x, sp.height + 3, sp.z, "minecraft:connection_east") == 1);
+        break;
+    }
     CHECK(name(0, py + 3, 0) == "minecraft:bedrock");
     CHECK(name(3, py, 0) == "minecraft:bedrock");
     CHECK(name(1, py, 0) == "minecraft:air");

@@ -121,6 +121,8 @@ set(PERLITE_SOURCES
     src/world/crafting/RecipeData.cpp
     src/world/crafting/Recipes.cpp
     src/world/inventory/Inventory.cpp
+    src/world/inventory/Stations.cpp
+    src/server/Connections.cpp
     src/world/inventory/ItemNbt.cpp
     src/world/level/block/BlockCatalog.cpp
     src/world/level/block/Blocks.cpp

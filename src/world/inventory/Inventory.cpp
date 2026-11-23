@@ -2,6 +2,7 @@
 
 #include <unordered_map>
 #include "world/crafting/Recipes.hpp"
+#include "protocol/NbtTree.hpp"
 
 #include "world/level/block/BlockCatalog.hpp"
 
@@ -127,10 +128,16 @@ namespace perlite {
             return containerKind >= 0 && containerKind < 2 && slot >= 0 && slot < static_cast<int>(container.size())
                        ? &container[static_cast<size_t>(slot)]
                        : nullptr;
+        case Container::BrewingInput:
+            return containerKind == 13 && container.size() == 5 ? &container[0] : nullptr;
+        case Container::BrewingResult:
+            return containerKind == 13 && container.size() == 5 && slot >= 1 && slot <= 3 ? &container[static_cast<size_t>(slot)] : nullptr;
+        case Container::BrewingFuel:
+            return containerKind == 13 && container.size() == 5 ? &container[4] : nullptr;
         case Container::FurnaceIngredient:
         case Container::BlastFurnaceIngredient:
         case Container::SmokerIngredient:
-            return containerKind >= 2 && container.size() == 3 ? &container[0] : nullptr;
+            return containerKind >= 2 && containerKind <= 4 && container.size() == 3 ? &container[0] : nullptr;
         case Container::FurnaceFuel:
             return containerKind >= 2 && container.size() == 3 ? &container[1] : nullptr;
         case Container::FurnaceOutput:
@@ -235,36 +242,49 @@ namespace perlite {
         out.stackId = stack.stackId;
         if (const CatalogItem* item = BlockCatalog::Instance().ItemById(stack.networkId); item && item->block)
             out.blockRuntimeId = static_cast<uint32_t>(item->blockHash);
-        if (stack.damage > 0 || !stack.enchants.empty()) {
-            std::vector<uint8_t> nbt = {0x0A, 0x00, 0x00};
-            const auto name = [&](uint8_t type, const char* n) {
-                nbt.push_back(type);
-                const size_t len = std::char_traits<char>::length(n);
-                nbt.push_back(static_cast<uint8_t>(len));
-                nbt.push_back(0x00);
-                nbt.insert(nbt.end(), n, n + len);
-            };
-            const auto le = [&](uint32_t v, int bytes) {
-                for (int i = 0; i < bytes; i++)
-                    nbt.push_back(static_cast<uint8_t>(v >> (8 * i)));
-            };
-            if (stack.damage > 0) {
-                name(0x03, "Damage");
-                le(stack.damage, 4);
-            }
+        out.metadata = stack.meta;
+        if (stack.damage > 0 || !stack.enchants.empty() || !stack.name.empty() || stack.repairCost > 0 || !stack.patterns.empty() ||
+            !stack.trimPattern.empty()) {
+            nbt::Value tag = nbt::Value::Make(nbt::Compound);
+            if (stack.damage > 0)
+                tag.SetInt("Damage", stack.damage);
             if (!stack.enchants.empty()) {
-                name(0x09, "ench");
-                nbt.push_back(0x0A);
-                le(static_cast<uint32_t>(stack.enchants.size()), 4);
+                nbt::Value ench = nbt::Value::Make(nbt::List);
+                ench.listType = nbt::Compound;
                 for (const auto& [id, level] : stack.enchants) {
-                    name(0x02, "id");
-                    le(static_cast<uint16_t>(id), 2);
-                    name(0x02, "lvl");
-                    le(static_cast<uint16_t>(level), 2);
-                    nbt.push_back(0x00);
+                    nbt::Value e = nbt::Value::Make(nbt::Compound);
+                    e.SetShort("id", id);
+                    e.SetShort("lvl", level);
+                    ench.list.push_back(std::move(e));
                 }
+                tag.Set("ench", std::move(ench));
             }
-            nbt.push_back(0x00);
+            if (!stack.name.empty()) {
+                nbt::Value display = nbt::Value::Make(nbt::Compound);
+                display.SetString("Name", stack.name);
+                tag.Set("display", std::move(display));
+            }
+            if (stack.repairCost > 0)
+                tag.SetInt("RepairCost", stack.repairCost);
+            if (!stack.patterns.empty()) {
+                nbt::Value list = nbt::Value::Make(nbt::List);
+                list.listType = nbt::Compound;
+                for (const auto& [code, color] : stack.patterns) {
+                    nbt::Value e = nbt::Value::Make(nbt::Compound);
+                    e.SetString("Pattern", code);
+                    e.SetInt("Color", color);
+                    list.list.push_back(std::move(e));
+                }
+                tag.Set("Patterns", std::move(list));
+            }
+            if (!stack.trimPattern.empty()) {
+                nbt::Value trim = nbt::Value::Make(nbt::Compound);
+                trim.SetString("Material", stack.trimMaterial);
+                trim.SetString("Pattern", stack.trimPattern);
+                tag.Set("Trim", std::move(trim));
+            }
+            std::vector<uint8_t> nbt;
+            nbt::Write(tag, nbt::Encoding::LittleEndian, nbt);
             const auto fill = [&](auto& extra) {
                 extra.hasNbt = decltype(extra.hasNbt)::True;
                 auto& tag = extra.nbt.emplace();
@@ -511,9 +531,48 @@ namespace perlite {
             }
             case Action::CraftRecipe:
             case Action::CraftRecipeAuto: {
+                if (work.containerKind == 12) {
+                    // The enchanting table: the offer the player picked.
+                    const PlayerInventory::EnchantOffer* offer = nullptr;
+                    int index = 0;
+                    for (size_t k = 0; k < work.enchantOffers.size(); k++)
+                        if (static_cast<uint32_t>(work.enchantOffers[k].optionId) == a.recipeNetworkId) {
+                            offer = &work.enchantOffers[k];
+                            index = static_cast<int>(k);
+                        }
+                    ItemStack& item = work.craft[14];
+                    if (!offer || item.Empty() || (!creative && work.levels < offer->cost))
+                        return result;
+                    ItemStack out = item;
+                    out.stackId = work.NewStackId();
+                    out.enchants = offer->enchants;
+                    if (const CatalogItem* c = BlockCatalog::Instance().ItemById(item.networkId); c && c->name == "minecraft:book")
+                        if (const CatalogItem* eb = BlockCatalog::Instance().ItemByName("minecraft:enchanted_book"))
+                            out.networkId = eb->networkId;
+                    work.output = out;
+                    result.levelsSpent = creative ? 0 : index + 1;
+                    result.enchanted = true;
+                    break;
+                }
                 crafted = Recipes::Instance().ByNetId(a.recipeNetworkId);
                 if (!crafted)
                     return result;
+                if (crafted->trim) {
+                    // An armour trim: the base keeps everything and gains the trim.
+                    const ItemStack& base = work.craft[51];
+                    const CatalogItem* tmpl = BlockCatalog::Instance().ItemById(work.craft[53].networkId);
+                    const CatalogItem* material = BlockCatalog::Instance().ItemById(work.craft[52].networkId);
+                    std::string pattern, materialId;
+                    if (base.Empty() || !tmpl || !material || !TrimOf(tmpl->name, material->name, pattern, materialId))
+                        return result;
+                    work.output = base;
+                    work.output.count = 1;
+                    work.output.stackId = work.NewStackId();
+                    work.output.trimPattern = pattern;
+                    work.output.trimMaterial = materialId;
+                    crafted = nullptr;
+                    break;
+                }
                 craftTimes = std::max<int>(1, a.timesCrafted);
                 work.output = work.MakeStack(crafted->outputId, crafted->outputCount * craftTimes);
                 if (crafted->smithing && !work.craft[51].Empty()) {
@@ -532,6 +591,10 @@ namespace perlite {
                     return result;
                 work.output = work.MakeStack(from.networkId, 1);
                 work.output.damage = from.damage;
+                work.output.meta = from.meta;
+                if (const CatalogItem* c = BlockCatalog::Instance().ItemById(from.networkId); c && c->name == "minecraft:enchanted_book")
+                    if (const CatalogItem* book = BlockCatalog::Instance().ItemByName("minecraft:book"))
+                        work.output.networkId = book->networkId;
                 if (!a1.Empty() && !a2.Empty() && a1.networkId == a2.networkId)
                     work.output.damage = static_cast<uint16_t>(std::max(0, static_cast<int>(a1.damage) + static_cast<int>(a2.damage) - 1000));
                 for (const auto& e : from.enchants)
@@ -541,9 +604,24 @@ namespace perlite {
             }
             case Action::CraftLoomRequest: {
                 const ItemStack& banner = work.craft[9];
-                if (banner.Empty())
+                const CatalogItem* dye = BlockCatalog::Instance().ItemById(work.craft[10].networkId);
+                if (banner.Empty() || !dye || a.pattern.empty() || banner.patterns.size() >= 6)
                     return result;
-                work.output = work.MakeStack(banner.networkId, 1);
+                // Banner pattern colours, as Bedrock numbers dyes.
+                static const char* const kDyes[] = {"black", "red", "green", "brown", "blue", "purple", "cyan", "light_gray",
+                                                    "gray", "pink", "lime", "yellow", "light_blue", "magenta", "orange", "white"};
+                int color = -1;
+                for (int k = 0; k < 16; k++)
+                    if (dye->name == std::string("minecraft:") + kDyes[k] + "_dye" ||
+                        (k == 0 && dye->name == "minecraft:ink_sac") || (k == 3 && dye->name == "minecraft:cocoa_beans") ||
+                        (k == 4 && dye->name == "minecraft:lapis_lazuli") || (k == 15 && dye->name == "minecraft:bone_meal"))
+                        color = k;
+                if (color < 0)
+                    return result;
+                work.output = banner;
+                work.output.count = 1;
+                work.output.stackId = work.NewStackId();
+                work.output.patterns.push_back({a.pattern, color});
                 break;
             }
             case Action::Consume: {
@@ -560,29 +638,17 @@ namespace perlite {
                 break;
             }
             case Action::Optional: {
-                // The anvil: the item with the material's enchantments added (a book or the same item),
-                // the material's durability repairing it.
-                const ItemStack& item = work.craft[1];
-                const ItemStack& material = work.craft[2];
-                if (item.Empty())
+                // The anvil: merging, repairing and renaming, for the game's level cost.
+                std::string rename;
+                if (a.filteredStringIndex >= 0 && static_cast<size_t>(a.filteredStringIndex) < request.customNames.size())
+                    rename = request.customNames[static_cast<size_t>(a.filteredStringIndex)];
+                int cost = 0, materialUsed = 0;
+                ItemStack out = AnvilResult(work.craft[1], work.craft[2], rename, cost, materialUsed);
+                if (out.Empty() || (!creative && (cost >= 40 || work.levels < cost)))
                     return result;
-                work.output = work.MakeStack(item.networkId, 1);
-                work.output.damage = item.damage;
-                work.output.enchants = item.enchants;
-                if (!material.Empty()) {
-                    if (material.networkId == item.networkId)
-                        work.output.damage = static_cast<uint16_t>(std::max(0, static_cast<int>(item.damage) - 100));
-                    for (const auto& [id, level] : material.enchants) {
-                        bool merged = false;
-                        for (auto& [eid, elevel] : work.output.enchants)
-                            if (eid == id) {
-                                elevel = elevel == level ? static_cast<int16_t>(level + 1) : std::max(elevel, level);
-                                merged = true;
-                            }
-                        if (!merged)
-                            work.output.enchants.push_back({id, level});
-                    }
-                }
+                out.stackId = work.NewStackId();
+                work.output = out;
+                result.levelsSpent = creative ? 0 : cost;
                 break;
             }
             case Action::NonImplemented:

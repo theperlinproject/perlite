@@ -28,6 +28,8 @@ namespace perlite {
                 return proto::ContainerSlotType::BlastFurnaceIngredient;
             case 4:
                 return proto::ContainerSlotType::SmokerIngredient;
+            case 13:
+                return proto::ContainerSlotType::BrewingInput;
             default:
                 return proto::ContainerSlotType::Container;
             }
@@ -57,6 +59,8 @@ namespace perlite {
                 return proto::WindowType::Anvil;
             case 12:
                 return proto::WindowType::Enchantment;
+            case 13:
+                return proto::WindowType::BrewingStand;
             default:
                 return proto::WindowType::Container;
             }
@@ -97,6 +101,8 @@ namespace perlite {
             return 11;
         if (n == "enchanting_table")
             return 12;
+        if (n == "brewing_stand")
+            return 13;
         return -1;
     }
 
@@ -106,6 +112,34 @@ namespace perlite {
         if (by.Spectator() || by.Visitor() || !by.InReach(x, y, z) || !world.Peek({x >> 4, z >> 4}))
             return false;
         const std::string name = BlockRegistry::Instance().Name(world.GetBlock(x, y, z));
+        if (name == "minecraft:campfire" || name == "minecraft:soul_campfire") {
+            // Food goes on a campfire's four spots and cooks in thirty seconds.
+            ItemStack& held = by.Inventory().HeldRef();
+            if (held.Empty() || !Recipes::Instance().Smelt(ItemName(held.networkId), 3))
+                return false;
+            auto [it, fresh] = containers.try_emplace(Key(x, y, z, dim));
+            BlockContainer& c = it->second;
+            if (fresh) {
+                c.kind = 14;
+                c.dimension = dim;
+                c.x = x;
+                c.y = y;
+                c.z = z;
+                c.slots.assign(4, ItemStack{});
+            }
+            for (size_t i = 0; i < 4; i++)
+                if (c.slots[i].Empty()) {
+                    c.slots[i] = held;
+                    c.slots[i].count = 1;
+                    c.timers[i] = 0;
+                    if (!by.Creative()) {
+                        by.Inventory().TakeHeld(1);
+                        by.SendSlot(by.Inventory().selected);
+                    }
+                    return true;
+                }
+            return false;
+        }
         if (name == "minecraft:bed" || name.ends_with("_bed")) {
             by.StartSleeping(x, y, z);
             return true;
@@ -118,9 +152,23 @@ namespace perlite {
         CloseContainer(by);
         static int windowCounter = 0;
         const int window = 1 + (windowCounter++ % 99);
-        if (kind >= 5) {
-            by.Inventory().containerKind = -1;
+        if (kind >= 5 && kind != 13) {
+            by.Inventory().containerKind = kind == 12 ? 12 : -1;
             by.Inventory().container.clear();
+            if (kind == 12) {
+                // Bookshelves around the table with air between them and it (the game's rule).
+                int shelves = 0;
+                const uint16_t shelf = BlockCatalog::Instance().DefaultBlock("minecraft:bookshelf");
+                for (int dx = -2; dx <= 2; dx++)
+                    for (int dz = -2; dz <= 2; dz++)
+                        if (std::abs(dx) == 2 || std::abs(dz) == 2)
+                            for (int dy = 0; dy <= 1; dy++)
+                                if (world.GetBlock(x + dx, y + dy, z + dz) == shelf &&
+                                    world.GetBlock(x + dx / 2, y + dy, z + dz / 2) == BlockRegistry::kAir)
+                                    shelves++;
+                by.Inventory().bookshelves = shelves;
+                by.Inventory().enchantOffers.clear();
+            }
             by.OpenWindow(window, WindowOf(kind), x, y, z);
             return true;
         }
@@ -132,12 +180,17 @@ namespace perlite {
             c.x = x;
             c.y = y;
             c.z = z;
-            c.slots.assign(kind >= 2 ? 3 : 27, ItemStack{});
+            c.slots.assign(kind == 13 ? 5 : kind >= 2 ? 3 : 27, ItemStack{});
         }
         by.Inventory().containerKind = kind;
         by.Inventory().container = c.slots;
+        for (ItemStack& slot : c.slots)
+            if (!slot.Empty() && slot.stackId == 0)
+                slot.stackId = by.Inventory().NewStackId(); // loot rolled at generation has none yet
+        by.Inventory().container = c.slots;
         by.openContainer = Key(x, y, z, dim);
         by.OpenWindow(window, WindowOf(kind), x, y, z);
+        ContainerLid(dim, x, y, z, kind, true);
         by.SendWindowContents(SlotType(kind), c.slots);
         if (kind >= 2) {
             by.SendWindowData(0, c.cook);
@@ -173,15 +226,55 @@ namespace perlite {
                 s = ItemStack{};
                 gave = true;
             }
+        const int64_t was = by.openContainer;
         if (inv.containerKind >= 0) {
             SyncContainer(by);
             inv.containerKind = -1;
             inv.container.clear();
         }
         by.openContainer = INT64_MIN;
+        if (const auto it = containers.find(was); it != containers.end())
+            ContainerLid(it->second.dimension, it->second.x, it->second.y, it->second.z, it->second.kind, false);
         by.ClearWindow();
         if (gave)
             by.SendInventory();
+    }
+
+    // A chest's lid opens for its first viewer and shuts after its last (the block event carries
+    // how many are looking); a barrel shows it through its open_bit. Both with the game's sounds.
+    void Server::ContainerLid(int dimension, int x, int y, int z, int kind, bool opening) {
+        if (kind != 0 && kind != 1)
+            return;
+        const int64_t key = Key(x, y, z, dimension);
+        int viewers = 0;
+        for (Session* s : InGamePlayers())
+            if (s->openContainer == key)
+                viewers++;
+        if (opening ? viewers != 1 : viewers != 0)
+            return; // only the first opening and the last closing move the lid
+        const std::vector<Session*> near = PlayersIn(dimension);
+        if (kind == 0) {
+            for (Session* s : near) {
+                s->SendBlockEvent(x, y, z, 1, viewers);
+                s->PlaySound(opening ? "ChestOpen" : "ChestClosed", x + 0.5, y + 0.5, z + 0.5);
+            }
+            return;
+        }
+        const uint16_t current = BlockAt(dimension, x, y, z);
+        auto states = BlockRegistry::Instance().States(current);
+        bool changed = false;
+        for (auto& st : states)
+            if (st.first == "open_bit") {
+                if (std::holds_alternative<bool>(st.second))
+                    st.second = opening;
+                else
+                    st.second = static_cast<int32_t>(opening ? 1 : 0);
+                changed = true;
+            }
+        if (changed)
+            ApplyBlock(dimension, x, y, z, BlockRegistry::Instance().Intern(BlockRegistry::Instance().Name(current), states));
+        for (Session* s : near)
+            s->PlaySound(opening ? "BarrelOpen" : "BarrelClose", x + 0.5, y + 0.5, z + 0.5);
     }
 
     void Server::DropContainer(int dimension, int x, int y, int z) {
@@ -217,7 +310,37 @@ namespace perlite {
 
     void Server::TickContainers() {
         for (auto& [key, c] : containers) {
-            if (c.kind < 2)
+            if (c.kind == 13) {
+                TickBrewing(c);
+                continue;
+            }
+            if (c.kind == 14) {
+                const std::string block = BlockRegistry::Instance().Name(BlockAt(c.dimension, c.x, c.y, c.z));
+                if (!block.contains("campfire")) {
+                    for (ItemStack& s : c.slots)
+                        if (!s.Empty())
+                            SpawnItem(s, c.x + 0.5, c.y + 0.5, c.z + 0.5, 0, 0.1, 0, 10, c.dimension);
+                    c.slots.assign(4, ItemStack{});
+                    continue;
+                }
+                const bool lit = BlockRegistry::Instance().Name(BlockAt(c.dimension, c.x, c.y, c.z)) == block &&
+                                 BlockCatalog::Instance().StateText(BlockAt(c.dimension, c.x, c.y, c.z)).find("extinguished=1") == std::string::npos;
+                for (size_t i = 0; i < 4; i++) {
+                    ItemStack& s = c.slots[i];
+                    if (s.Empty() || !lit || ++c.timers[i] < 600)
+                        continue;
+                    if (const SmeltRecipe* r = Recipes::Instance().Smelt(ItemName(s.networkId), 3)) {
+                        ItemStack cooked;
+                        cooked.networkId = r->outputId;
+                        cooked.count = 1;
+                        SpawnItem(cooked, c.x + 0.5, c.y + 1.0, c.z + 0.5, 0, 0.1, 0, 10, c.dimension);
+                    }
+                    s = ItemStack{};
+                    c.timers[i] = 0;
+                }
+                continue;
+            }
+            if (c.kind < 2 || c.kind > 4)
                 continue;
             const int station = c.kind - 2;
             const int cookTime = station == 0 ? 200 : 100;
@@ -369,7 +492,7 @@ namespace perlite {
             c.x = x;
             c.y = y;
             c.z = z;
-            c.slots.assign(kind >= 2 ? 3 : 27, ItemStack{});
+            c.slots.assign(kind == 13 ? 5 : kind >= 2 ? 3 : 27, ItemStack{});
             ItemListFromNbt(e.Find("Items"), nullptr, c.slots);
             c.burn = static_cast<int>(e.Int("BurnTime"));
             c.burnMax = static_cast<int>(e.Int("BurnDuration"));
@@ -469,6 +592,69 @@ namespace perlite {
                     id = "minecraft:zombie_villager_v2";
                 MobsIn(dimension).Spawn(id, e.x + 0.5, e.y, e.z + 0.5, true);
             }
+        }
+    }
+
+    // A brewing stand: blaze powder gives twenty brews; a brew takes twenty seconds and turns each
+    // bottle the ingredient fits into the next potion.
+    void Server::TickBrewing(BlockContainer& c) {
+        if (c.slots.size() != 5)
+            return;
+        ItemStack& ingredient = c.slots[0];
+        ItemStack& fuel = c.slots[4];
+        const auto brewsAny = [&] {
+            if (ingredient.Empty())
+                return false;
+            for (int i = 1; i <= 3; i++) {
+                int16_t item;
+                uint16_t meta;
+                if (!c.slots[static_cast<size_t>(i)].Empty() &&
+                    BrewResult(c.slots[static_cast<size_t>(i)].networkId, c.slots[static_cast<size_t>(i)].meta, ingredient.networkId, item, meta))
+                    return true;
+            }
+            return false;
+        };
+        bool changed = false;
+        if (c.burn <= 0 && !fuel.Empty() && ItemName(fuel.networkId) == "minecraft:blaze_powder" && brewsAny()) {
+            c.burn = c.burnMax = 20;
+            if (--fuel.count == 0)
+                fuel = ItemStack{};
+            changed = true;
+        }
+        if (brewsAny() && c.burn > 0) {
+            if (c.cook == 0)
+                c.cook = 400;
+            if (--c.cook == 0) {
+                for (int i = 1; i <= 3; i++) {
+                    ItemStack& bottle = c.slots[static_cast<size_t>(i)];
+                    int16_t item;
+                    uint16_t meta;
+                    if (!bottle.Empty() && BrewResult(bottle.networkId, bottle.meta, ingredient.networkId, item, meta)) {
+                        bottle.networkId = item;
+                        bottle.meta = meta;
+                    }
+                }
+                const std::string used = ItemName(ingredient.networkId);
+                if (--ingredient.count == 0)
+                    ingredient = ItemStack{};
+                c.burn--;
+                changed = true;
+                (void)used;
+            }
+        } else if (c.cook > 0) {
+            c.cook = 0;
+            changed = true;
+        }
+        for (Session* s : PlayersIn(c.dimension)) {
+            if (s->openContainer != Key(c.x, c.y, c.z, c.dimension))
+                continue;
+            if (changed) {
+                s->Inventory().container = c.slots;
+                s->SendWindowContents(proto::ContainerSlotType::BrewingInput, c.slots);
+            }
+            s->SendWindowData(0, c.cook);
+            s->SendWindowData(1, c.burn);
+            s->SendWindowData(2, c.burnMax);
         }
     }
 }

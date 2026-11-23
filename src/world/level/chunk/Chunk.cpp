@@ -1,6 +1,9 @@
 #include "world/level/chunk/Chunk.hpp"
 
 #include "world/level/block/Blocks.hpp"
+#include "protocol/NbtWriter.hpp"
+#include <mutex>
+#include <string_view>
 
 #include <algorithm>
 #include <map>
@@ -278,5 +281,167 @@ namespace perlite {
             }
         }
         out.push_back(0);
+    }
+}
+
+namespace perlite {
+    namespace {
+        bool EndsWith(std::string_view s, std::string_view t) { return s.size() >= t.size() && s.substr(s.size() - t.size()) == t; }
+
+        // The block actor (the client's block entity) a block carries, as the game names it; empty
+        // for blocks that have none. The client draws chests, beds, signs, banners, skulls and the
+        // rest through their block actor, so a chunk sends one for each.
+        const char* ActorIdOf(std::string_view n) {
+            if (n.starts_with("minecraft:"))
+                n.remove_prefix(10);
+            if (n == "chest" || n == "trapped_chest")
+                return "Chest";
+            if (n == "ender_chest")
+                return "EnderChest";
+            if (n == "barrel")
+                return "Barrel";
+            if (n == "furnace" || n == "lit_furnace")
+                return "Furnace";
+            if (n == "blast_furnace" || n == "lit_blast_furnace")
+                return "BlastFurnace";
+            if (n == "smoker" || n == "lit_smoker")
+                return "Smoker";
+            if (n == "bed")
+                return "Bed";
+            if (EndsWith(n, "_hanging_sign"))
+                return "HangingSign";
+            if (n == "standing_sign" || n == "wall_sign" || EndsWith(n, "_standing_sign") || EndsWith(n, "_wall_sign"))
+                return "Sign";
+            if (n == "standing_banner" || n == "wall_banner")
+                return "Banner";
+            if (n == "skull" || EndsWith(n, "_skull") || EndsWith(n, "_head"))
+                return n == "piston_arm_collision" ? "" : "Skull";
+            if (n == "enchanting_table")
+                return "EnchantTable";
+            if (n == "brewing_stand")
+                return "BrewingStand";
+            if (n == "flower_pot")
+                return "FlowerPot";
+            if (n == "mob_spawner")
+                return "MobSpawner";
+            if (n == "bell")
+                return "Bell";
+            if (n == "campfire" || n == "soul_campfire")
+                return "Campfire";
+            if (n == "lectern")
+                return "Lectern";
+            if (n == "beacon")
+                return "Beacon";
+            if (n == "end_portal")
+                return "EndPortal";
+            if (n == "end_gateway")
+                return "EndGateway";
+            if (n == "hopper")
+                return "Hopper";
+            if (n == "dispenser")
+                return "Dispenser";
+            if (n == "dropper")
+                return "Dropper";
+            if (n == "jukebox")
+                return "Jukebox";
+            if (n == "noteblock")
+                return "Music";
+            if (n == "undyed_shulker_box" || EndsWith(n, "_shulker_box"))
+                return "ShulkerBox";
+            if (n == "cauldron")
+                return "Cauldron";
+            if (n == "daylight_detector" || n == "daylight_detector_inverted")
+                return "DaylightDetector";
+            if (n == "powered_comparator" || n == "unpowered_comparator")
+                return "Comparator";
+            if (n == "conduit")
+                return "Conduit";
+            if (n == "beehive" || n == "bee_nest")
+                return "Beehive";
+            if (n == "decorated_pot")
+                return "DecoratedPot";
+            if (n == "chiseled_bookshelf")
+                return "ChiseledBookshelf";
+            if (n == "vault")
+                return "Vault";
+            if (n == "trial_spawner")
+                return "TrialSpawner";
+            if (n == "crafter")
+                return "Crafter";
+            if (n == "sculk_sensor" || n == "calibrated_sculk_sensor")
+                return n == "sculk_sensor" ? "SculkSensor" : "CalibratedSculkSensor";
+            if (n == "sculk_catalyst")
+                return "SculkCatalyst";
+            if (n == "sculk_shrieker")
+                return "SculkShrieker";
+            if (n == "brushable_block" || n == "suspicious_sand" || n == "suspicious_gravel")
+                return "BrushableBlock";
+            if (n == "creaking_heart")
+                return "CreakingHeart";
+            if (n == "lodestone")
+                return "Lodestone";
+            if (n == "respawn_anchor")
+                return "RespawnAnchor";
+            if (n == "frame" || n == "glow_frame")
+                return n == "frame" ? "ItemFrame" : "GlowItemFrame";
+            if (n == "moving_block")
+                return "MovingBlock";
+            return "";
+        }
+
+        // Block ids only ever grow, so the answer for an id is kept once known.
+        const char* ActorIdCached(uint16_t id, const BlockRegistry& blocks) {
+            static std::mutex lock;
+            static std::vector<const char*> cache;
+            {
+                std::lock_guard g(lock);
+                if (id < cache.size() && cache[id])
+                    return cache[id];
+            }
+            const char* a = ActorIdOf(blocks.Name(id));
+            std::lock_guard g(lock);
+            if (cache.size() <= id)
+                cache.resize(static_cast<size_t>(id) + 1, nullptr);
+            cache[id] = a;
+            return a;
+        }
+    }
+
+    // The chunk's block actors, as the payload's tail carries them: one network NBT compound each.
+    void ChunkColumn::AppendBlockActors(std::vector<uint8_t>& out, int chunkX, int chunkZ, int dimension) const {
+        const BlockRegistry& blocks = BlockRegistry::Instance();
+        const DimensionRange range = RangeOf(dimension);
+        for (int sec = range.FirstSection(); sec < range.FirstSection() + range.SectionCount(); sec++) {
+            const Section& s = sections[static_cast<size_t>(sec)];
+            if (!s.cells) {
+                if (s.uniform == BlockRegistry::kAir || !*ActorIdCached(s.uniform, blocks))
+                    continue;
+            }
+            for (int i = 0; i < kCells; i++) {
+                const uint16_t b = s.cells ? (*s.cells)[static_cast<size_t>(i)] : s.uniform;
+                if (b == BlockRegistry::kAir)
+                    continue;
+                const char* id = ActorIdCached(b, blocks);
+                if (!*id)
+                    continue;
+                const int lx = i >> 8, lz = (i >> 4) & 15, ly = i & 15;
+                nbt::Writer w(nbt::Encoding::Network);
+                w.BeginRoot();
+                w.PutString("id", id);
+                w.PutInt("x", chunkX * 16 + lx);
+                w.PutInt("y", kMinY + sec * 16 + ly);
+                w.PutInt("z", chunkZ * 16 + lz);
+                w.PutByte("isMovable", 1);
+                const std::string_view sid = id;
+                if (sid == "Bed")
+                    w.PutByte("color", 14); // red, the colour of the beds structures place
+                else if (sid == "Banner")
+                    w.PutInt("Base", 15); // white
+                else if (sid == "Chest" || sid == "Barrel" || sid == "ShulkerBox")
+                    w.PutByte("Findable", 0);
+                w.EndCompound();
+                out.insert(out.end(), w.Bytes().begin(), w.Bytes().end());
+            }
+        }
     }
 }

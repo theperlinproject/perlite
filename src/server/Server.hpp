@@ -181,12 +181,19 @@ namespace perlite {
             int x = 0, y = 0, z = 0;
             std::vector<ItemStack> slots;
             int burn = 0, burnMax = 0, cook = 0;
+            std::array<int, 4> timers{}; // a campfire's four cooking slots
             bool lit = false;
             int dimension = 0;
         };
         bool UseBlock(Session& by, int x, int y, int z);
+        void TickBrewing(BlockContainer& c);
         void SyncContainer(Session& by);
         void CloseContainer(Session& by);
+        uint16_t ConnectedState(int dimension, int x, int y, int z, uint16_t self);
+        void RefreshConnection(int dimension, int x, int y, int z);
+        void RefreshConnectionsAround(int dimension, int x, int y, int z);
+        void ConnectChunk(int dimension, ChunkPos pos);
+        void ContainerLid(int dimension, int x, int y, int z, int kind, bool opening);
         static int ContainerKindOf(const std::string& blockName);
         const std::vector<uint8_t>& ItemRegistryBody() const { return itemRegistryBody; }
         const std::vector<uint8_t>& CreativeContentBody() const { return creativeBody; }

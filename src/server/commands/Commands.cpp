@@ -823,6 +823,25 @@ namespace perlite {
             return at;
         };
 
+        // Items and blocks complete from the game's lists, as the game's own commands do.
+        std::vector<std::string> itemNames, blockNames;
+        const auto namesOf = [&](bool blocks) -> const std::vector<std::string>& {
+            std::vector<std::string>& list = blocks ? blockNames : itemNames;
+            if (list.empty()) {
+                std::set<std::string> seen;
+                for (const CatalogItem& item : BlockCatalog::Instance().Items()) {
+                    if (blocks && !item.block)
+                        continue;
+                    std::string n = item.name;
+                    if (n.starts_with("minecraft:"))
+                        n = n.substr(10);
+                    if (!n.empty() && seen.insert(n).second)
+                        list.push_back(n);
+                }
+            }
+            return list;
+        };
+
         int biomeSoft = -1;
         const auto biomes = [&]() {
             if (biomeSoft < 0) {
@@ -866,8 +885,12 @@ namespace perlite {
                     case ArgKind::Literal:
                     case ArgKind::Enum:
                         arg.enumType = ET::Enum;
-                        arg.valueType = static_cast<VT>(
-                            enumOf(cmdName + "_" + p.name + "_" + std::to_string(o), p.values));
+                        // A keyword is an enum of itself; a choice is named after its parameter, as
+                        // the client shows the name in the hint (<mode: GameMode>).
+                        arg.valueType = static_cast<VT>(enumOf(
+                            p.kind == ArgKind::Literal ? cmdName + "_" + p.values.front()
+                                                       : cmdName + "_" + p.name + (o ? "_" + std::to_string(o) : std::string()),
+                            p.values));
                         break;
                     case ArgKind::Int:
                         arg.valueType = VT::Int;
@@ -876,9 +899,15 @@ namespace perlite {
                         arg.valueType = VT::Float;
                         break;
                     case ArgKind::String:
-                    case ArgKind::Item:
-                    case ArgKind::Block:
                         arg.valueType = VT::String;
+                        break;
+                    case ArgKind::Item:
+                        arg.enumType = ET::Enum;
+                        arg.valueType = static_cast<VT>(enumOf("Item", namesOf(false)));
+                        break;
+                    case ArgKind::Block:
+                        arg.enumType = ET::Enum;
+                        arg.valueType = static_cast<VT>(enumOf("Block", namesOf(true)));
                         break;
                     case ArgKind::Text:
                         arg.valueType = VT::RawText;

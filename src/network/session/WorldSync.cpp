@@ -76,6 +76,14 @@ namespace perlite {
         Send(p);
     }
 
+    void Session::SendBlockEvent(int x, int y, int z, int type, int data) {
+        proto::BlockEventPacket p;
+        p.position = {x, y, z};
+        p.type = static_cast<proto::BlockEventPacketType>(type);
+        p.data = data;
+        Send(p);
+    }
+
     void Session::SendBlockUpdate(int x, int y, int z, int32_t networkId, uint32_t layer) {
         proto::UpdateBlockPacket u;
         u.position = {x, y, z};

@@ -22,6 +22,7 @@ using namespace perlite;
 namespace proto = perlite::proto2225;
 namespace net = perlite::net;
 
+#include "world/inventory/Inventory.hpp"
 #include "support/LoopbackClient.hpp"
 using namespace perlite::testclient;
 
@@ -503,6 +504,41 @@ int main(int argc, char** argv) {
             run("/setblock 5 60 5 stone");
             CHECK(texts().contains("Changed the block at 5, 60, 5"));
             CHECK(server.GetBlock(5, 60, 5, out) == perlin::abi::Status::Ok && out.contains("stone"));
+            {
+                // Bars and walls take their connections from their neighbours, as the game's do.
+                run("/setblock 6 60 5 iron_bars");
+                run("/setblock 7 60 5 iron_bars");
+                const auto states = [&](int x, int y, int z) {
+                    return BlockRegistry::Instance().States(server.World(0).GetBlock(x, y, z));
+                };
+                const auto bit = [&](int x, int y, int z, const std::string& key) {
+                    for (const auto& [k, v] : states(x, y, z))
+                        if (k == key) {
+                            if (const bool* b = std::get_if<bool>(&v))
+                                return *b ? 1 : 0;
+                            if (const int32_t* i = std::get_if<int32_t>(&v))
+                                return *i;
+                        }
+                    return -1;
+                };
+                CHECK(bit(6, 60, 5, "minecraft:connection_west") == 1 && bit(6, 60, 5, "minecraft:connection_east") == 1 &&
+                      bit(6, 60, 5, "minecraft:connection_north") == 0);
+                CHECK(bit(7, 60, 5, "minecraft:connection_west") == 1 && bit(7, 60, 5, "minecraft:connection_east") == 0);
+                run("/setblock 7 60 5 air");
+                CHECK(bit(6, 60, 5, "minecraft:connection_east") == 0);
+                run("/setblock 5 61 5 cobblestone_wall");
+                run("/setblock 6 61 5 cobblestone_wall");
+                std::string side;
+                for (const auto& [k, v] : states(5, 61, 5))
+                    if (k == "wall_connection_type_east")
+                        if (const std::string* t = std::get_if<std::string>(&v))
+                            side = *t;
+                CHECK(side == "short");
+                CHECK(bit(5, 61, 5, "wall_post_bit") == 1);
+                run("/setblock 6 60 5 air");
+                run("/setblock 5 61 5 air");
+                run("/setblock 6 61 5 air");
+            }
             run("/fill 0 70 0 3 72 3 stone");
             CHECK(texts().contains("48 blocks filled"));
             run("/fill 0 70 0 3 72 3 air hollow");
@@ -797,11 +833,10 @@ int main(int argc, char** argv) {
                     p[0].valueType ==
                         proto::AvailableCommandsPacketCommandDataEntryOverloadsEntryParametersEntryValueType::
                             Target);
-                CHECK(
-                    p[1].valueType ==
-                        proto::AvailableCommandsPacketCommandDataEntryOverloadsEntryParametersEntryValueType::
-                            String &&
-                    !p[1].optional);
+                // The item is an enum of the game's item names, so it completes.
+                CHECK(p[1].enumType == proto::AvailableCommandsPacketCommandDataEntryOverloadsEntryParametersEntryEnumType::Enum &&
+                      static_cast<size_t>(p[1].valueType) < packet.enums.size() && packet.enums[static_cast<size_t>(p[1].valueType)].name == "Item" &&
+                      !p[1].optional);
                 CHECK(
                     p[2].valueType ==
                         proto::AvailableCommandsPacketCommandDataEntryOverloadsEntryParametersEntryValueType::
@@ -996,6 +1031,32 @@ int main(int argc, char** argv) {
         alice.Settle();
     }
 
+    {
+    // Stations: enchanting offers, the anvil, brewing, trims.
+        const auto id = [&](const char* n) { const CatalogItem* i = BlockCatalog::Instance().ItemByName(n); return i ? i->networkId : int16_t{0}; };
+        ItemStack sword;
+        sword.networkId = id("minecraft:diamond_sword");
+        sword.count = 1;
+        const auto offers = EnchantOffers(sword, 15, 12345);
+        CHECK(offers.size() == 3 && offers[2].cost == 30 && !offers[0].enchants.empty());
+        for (const auto& o : offers)
+            for (const auto& [e, l] : o.enchants)
+                CHECK(e == 9 || e == 10 || e == 11 || e == 12 || e == 13 || e == 14 || e == 17); // sword enchantments only
+        ItemStack book;
+        book.networkId = id("minecraft:enchanted_book");
+        book.count = 1;
+        book.enchants = {{9, 5}};
+        int cost = 0, used = 0;
+        const ItemStack merged = AnvilResult(sword, book, "Blade", cost, used);
+        CHECK(merged.Enchant(9) == 5 && merged.name == "Blade" && cost > 0 && merged.repairCost == 1);
+        int16_t outItem = 0;
+        uint16_t outMeta = 0;
+        CHECK(BrewResult(id("minecraft:potion"), 0, id("minecraft:nether_wart"), outItem, outMeta) && outMeta == 4);
+        CHECK(BrewResult(id("minecraft:potion"), 4, id("minecraft:sugar"), outItem, outMeta) && outMeta == 14);
+        CHECK(BrewResult(id("minecraft:potion"), 14, id("minecraft:gunpowder"), outItem, outMeta) && outItem == id("minecraft:splash_potion"));
+        std::string pattern, material;
+        CHECK(TrimOf("minecraft:coast_armor_trim_smithing_template", "minecraft:iron_ingot", pattern, material) && pattern == "coast" && material == "iron");
+    }
     server.Stop();
 
     {

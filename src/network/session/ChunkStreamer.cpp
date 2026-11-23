@@ -73,7 +73,7 @@ namespace perlite {
         if (entry.sealedVersion == entry.column.version && entry.sealedVersion == entry.payloadVersion &&
             entry.sealedSettings == settings)
             return;
-        const std::vector<uint8_t>& payload = server.World(dimension).Payload(entry);
+        const std::vector<uint8_t>& payload = server.World(dimension).Payload(entry, pos);
         proto::LevelChunkPacket lc;
         lc.x = pos.x;
         lc.z = pos.z;
@@ -92,7 +92,7 @@ namespace perlite {
     }
 
     void Session::SendChunk(ChunkEntry& entry, ChunkPos pos) {
-        const std::vector<uint8_t>& payload = server.World(dimension).Payload(entry);
+        const std::vector<uint8_t>& payload = server.World(dimension).Payload(entry, pos);
         const auto build = [&] {
             proto::LevelChunkPacket lc;
             lc.x = pos.x;

@@ -441,6 +441,7 @@ namespace perlite {
             for (const ChunkPos& ready : chunks->TakeReady()) {
                 LoadContainers(kOverworld, ready);
                 ConsumeGenerated(kOverworld, ready);
+                ConnectChunk(kOverworld, ready);
                 mobWorld->OnChunkReady(ready.x, ready.z);
             }
             for (size_t d = 0; d < otherWorlds.size(); d++)
@@ -448,6 +449,7 @@ namespace perlite {
                     for (const ChunkPos& ready : otherWorlds[d]->TakeReady()) {
                         LoadContainers(static_cast<int>(d), ready);
                         ConsumeGenerated(static_cast<int>(d), ready);
+                        ConnectChunk(static_cast<int>(d), ready);
                         MobsIn(static_cast<int>(d)).OnChunkReady(ready.x, ready.z);
                         if (static_cast<int>(d) == kEnd)
                             fight->OnChunkReady(ready.x, ready.z);
@@ -1154,6 +1156,7 @@ namespace perlite {
         if (liquidChange >= 0)
             QueueBlockUpdate(dimension, x, y, z, static_cast<uint16_t>(liquidChange), 1);
         FluidNeighbourChanged(dimension, x, y, z);
+        RefreshConnectionsAround(dimension, x, y, z);
         if (listens)
             plugins->Dispatch<abi::Event::BlockChanged>(
                 {.x = x, .y = y, .z = z, .from = before, .to = BlockRegistry::Instance().Name(block)});

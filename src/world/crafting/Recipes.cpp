@@ -1,4 +1,5 @@
 #include "world/crafting/Recipes.hpp"
+#include "world/inventory/Inventory.hpp"
 #include "common/Log.hpp"
 #include "common/Json.hpp"
 #include <fstream>
@@ -203,6 +204,17 @@ namespace perlite {
             return r;
         };
         for (const CraftRecipe& r : crafting) {
+            if (r.trim) {
+                proto::SmithingTrimRecipe t;
+                t.recipeId = "minecraft:smithing_trim_" + std::to_string(r.netId);
+                t.template_ = ingredient(r.input[0]);
+                t.addition = ingredient(r.input[2]);
+                t.input = ingredient(r.input[1]);
+                t.block = "smithing_table";
+                t.networkId = r.netId;
+                p.smithingTrimRecipes.push_back(std::move(t));
+                continue;
+            }
             if (r.smithing) {
                 proto::SmithingTransformRecipe t;
                 t.recipeId = "minecraft:" + r.output + "_smithing_" + std::to_string(r.netId);
@@ -249,6 +261,21 @@ namespace perlite {
                 p.shapelessRecipes.push_back(std::move(s));
             }
         }
+        // Brewing, so the client lets ingredients and potions into the stand.
+        ForEachBrew([&](int from, const std::string& ingredient, int to) {
+            proto::PotionTypeRecipesEntry e;
+            e.inputItemId = ItemId("potion");
+            e.inputItemMeta = from;
+            e.ingredientId = ItemId(ingredient);
+            e.outputItemId = ItemId("potion");
+            e.outputItemMeta = to;
+            if (e.inputItemId && e.ingredientId)
+                p.potionTypeRecipes.push_back(e);
+        });
+        if (ItemId("potion") && ItemId("gunpowder") && ItemId("splash_potion"))
+            p.potionContainerRecipes.push_back({ItemId("potion"), ItemId("gunpowder"), ItemId("splash_potion")});
+        if (ItemId("splash_potion") && ItemId("dragon_breath") && ItemId("lingering_potion"))
+            p.potionContainerRecipes.push_back({ItemId("splash_potion"), ItemId("dragon_breath"), ItemId("lingering_potion")});
         p.clearRecipes = true;
         net::EncodeChecked(p, body);
     }
@@ -313,6 +340,16 @@ namespace perlite {
                     r.netId = static_cast<uint32_t>(crafting.size() + 1);
                     crafting.push_back(std::move(r));
                     added++;
+                } else if (kind == "minecraft:recipe_smithing_trim") {
+                    CraftRecipe r;
+                    r.block = "smithing_table";
+                    r.smithing = true;
+                    r.trim = true;
+                    r.input = {{itemOf(body["template"]), 1}, {itemOf(body["base"]), 1}, {itemOf(body["addition"]), 1}};
+                    r.output = "trim";
+                    r.netId = static_cast<uint32_t>(crafting.size() + 1);
+                    crafting.push_back(std::move(r));
+                    added++;
                 } else if (kind == "minecraft:recipe_furnace") {
                     const std::string input = itemOf(body["input"]), output = itemOf(body["output"]);
                     bool known = false;
@@ -354,7 +391,7 @@ namespace perlite {
         for (const SmeltRecipe& s : smelting) {
             if (!Matches(s.input, n))
                 continue;
-            if ((station == 0 && s.furnace) || (station == 1 && s.blast) || (station == 2 && s.smoker))
+            if ((station == 0 && s.furnace) || (station == 1 && s.blast) || (station == 2 && s.smoker) || (station == 3 && s.campfire))
                 return &s;
         }
         return nullptr;

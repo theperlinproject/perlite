@@ -788,6 +788,24 @@ namespace perlite::structure {
                             }
                         }
                 }
+                // Pieces the game props up (the desert pyramid): every column of the footprint is
+                // filled down from the given height to the first solid ground.
+                if (!p.fillDown.empty()) {
+                    const uint16_t fill = BlockCatalog::Instance().DefaultBlock(p.fillDown);
+                    for (int wx = std::max(p.box.x0, baseX); wx <= std::min(p.box.x1, baseX + 15); wx++)
+                        for (int wz = std::max(p.box.z0, baseZ); wz <= std::min(p.box.z1, baseZ + 15); wz++)
+                            for (int y = p.fillTop; y > probe.minY; y--) {
+                                const uint16_t here = out.Get(wx - baseX, y, wz - baseZ);
+                                if (here != BlockRegistry::kAir) {
+                                    const std::string n = BlockRegistry::Instance().Name(here);
+                                    if (!n.contains("water") && !n.contains("lava") && !n.contains("short_grass") &&
+                                        !n.contains("tall_grass") && !n.contains("deadbush") && !n.contains("cactus") &&
+                                        !n.contains("snow_layer") && !n.contains("fern") && !n.contains("bush"))
+                                        break;
+                                }
+                                out.Set(wx - baseX, y, wz - baseZ, fill);
+                            }
+                }
                 for (const TemplateBlock& b : t.blocks) {
                     if (t.isStructureBlock[b.state])
                         continue;

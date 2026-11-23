@@ -52,7 +52,16 @@ namespace perlite {
         for (const proto::ItemStackRequest& r : p.requests) {
             const bool furnace = inventory.containerKind >= 2 && inventory.container.size() == 3;
             const ItemStack smelted = furnace ? inventory.container[2] : ItemStack{};
+            inventory.levels = xpLevel;
+            const ItemStack enchantBefore = inventory.craft[14];
             const RequestResult result = ApplyStackRequest(inventory, r, creative);
+            if (result.ok && result.levelsSpent > 0)
+                AddLevels(-result.levelsSpent);
+            if (result.ok && result.enchanted)
+                inventory.enchantSeed = static_cast<uint32_t>(std::random_device{}());
+            if (result.ok && inventory.containerKind == 12 && (result.enchanted || !inventory.craft[14].Same(enchantBefore) ||
+                                                                inventory.craft[14].count != enchantBefore.count))
+                SendEnchantOffers();
             if (result.ok && furnace && !smelted.Empty() && inventory.container.size() == 3) {
                 const ItemStack& now = inventory.container[2];
                 const int taken = now.Empty() || now.networkId != smelted.networkId ? smelted.count : smelted.count - now.count;
@@ -277,6 +286,28 @@ namespace perlite {
         c.containerId = proto::ContainerSlotType::Armor;
         p.container = c;
         p.item = ToWire(inventory.armor[static_cast<size_t>(slot)]);
+        Send(p);
+    }
+
+    // The enchanting table's three offers for the item in it (the game's costs and enchantments).
+    void Session::SendEnchantOffers() {
+        if (inventory.enchantSeed == 0)
+            inventory.enchantSeed = static_cast<uint32_t>(std::random_device{}()) | 1u;
+        inventory.enchantOffers = EnchantOffers(inventory.craft[14], inventory.bookshelves, inventory.enchantSeed);
+        proto::PlayerEnchantOptionsPacket p;
+        static const char* const kWords[] = {"the", "elder", "scrolls", "klaatu", "berata", "niktu", "xyzzy", "bless", "curse", "light",
+                                             "darkness", "fire", "air", "earth", "water", "hot", "dry", "cold", "wet", "ignite"};
+        for (size_t i = 0; i < inventory.enchantOffers.size(); i++) {
+            const PlayerInventory::EnchantOffer& o = inventory.enchantOffers[i];
+            proto::EnchantOption e;
+            e.cost = static_cast<uint8_t>(std::min(o.cost, 255));
+            e.slotFlags = 0;
+            for (const auto& [id, level] : o.enchants)
+                e.selfEnchants.push_back({static_cast<uint8_t>(id), static_cast<uint8_t>(level)});
+            e.name = std::string(kWords[(inventory.enchantSeed + i) % 20]) + " " + kWords[(inventory.enchantSeed / 7 + i * 3) % 20];
+            e.optionId = o.optionId;
+            p.options.push_back(std::move(e));
+        }
         Send(p);
     }
 }

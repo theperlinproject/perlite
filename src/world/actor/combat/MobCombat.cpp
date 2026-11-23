@@ -64,7 +64,8 @@ namespace perlite {
         const double reach = IsDragon(*m) ? 7.0 + 8.0 : 7.0;
         if (dx * dx + dy * dy + dz * dz > reach * reach)
             return false;
-        return Hurt(*m, by.GameMode() == 1 ? std::max(damage, 1000.0f) : damage, by.X(), by.Z(), &by, knockback);
+        // Creative players deal normal damage; only the void and /kill bypass health.
+        return Hurt(*m, damage, by.X(), by.Z(), &by, knockback);
     }
 
     bool ActorManager::Interact(Session& by, uint64_t entity) {

@@ -433,6 +433,7 @@ static void TestBlockCatalog() {
     CHECK(c.ItemByName("mymod:jade_block") == c.ItemByName("minecraft:emerald_block"));
     c.Unalias("mymod:jade_block");
     CHECK(!c.Knows("mymod:jade_block"));
+
 }
 
 static perlite::proto2225::ItemStackRequestActionsEntry

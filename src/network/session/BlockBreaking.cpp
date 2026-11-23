@@ -122,6 +122,25 @@ namespace perlite {
                             static_cast<int>(std::clamp(65535.0 * speed, 0.0, 65535.0)));
     }
 
+    // While a block is dug, everyone watching (the digger too) sees bits fly off the face being
+    // hit and hears the hits, as the game sends them: a punch particle every tick, a hit sound
+    // every fourth.
+    void Session::PunchBlock(int x, int y, int z, int face) {
+        const uint16_t id = server.BlockAt(dimension, x, y, z);
+        if (id == BlockRegistry::kAir)
+            return;
+        const int32_t hash = BlockRegistry::Instance().Hash(id);
+        // The face-specific punch events (down, up, north, south, west, east) carry the whole block id.
+        const int event = static_cast<int>(proto::LevelEventPacketEvent::ParticlePunchBlockDown) + std::clamp(face, 0, 5);
+        const bool sound = breaking.punches++ % 4 == 0;
+        for (Session* s : server.PlayersIn(dimension))
+            if (s->HasSent({x >> 4, z >> 4})) {
+                s->SendLevelEvent(event, x + 0.5, y + 0.5, z + 0.5, hash);
+                if (sound)
+                    s->PlaySound("Hit", x + 0.5, y + 0.5, z + 0.5, hash);
+            }
+    }
+
     void Session::StopBreaking() {
         if (!breaking.active)
             return;
@@ -175,6 +194,8 @@ namespace perlite {
                     if (!creative && (!breaking.active || breaking.x != at.x || breaking.y != at.y ||
                                       breaking.z != at.z))
                         StartBreaking(at.x, at.y, at.z, action.face);
+                    if (!creative && breaking.active)
+                        PunchBlock(at.x, at.y, at.z, action.face);
                     break;
                 case proto::Action::AbortBreak:
                     StopBreaking();

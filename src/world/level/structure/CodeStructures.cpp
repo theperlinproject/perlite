@@ -174,6 +174,15 @@ namespace perlite::structure {
             return false;
         Builder b("code/desert_pyramid", 21, 27, 21);
         const int g = 12; // ground floor height in the template
+        // The game sets the pyramid on the lowest ground under it, up to two blocks lower, on a
+        // sandstone base four blocks deep that is propped down to the ground below.
+        int lowest = ground;
+        for (int dx = 0; dx <= 20; dx += 4)
+            for (int dz = 0; dz <= 20; dz += 4)
+                lowest = std::min(lowest, probe.surface(x + dx, z + dz));
+        lowest = std::min({lowest, probe.surface(x + 20, z), probe.surface(x, z + 20), probe.surface(x + 20, z + 20)});
+        const int floorY = lowest - r.NextInt(3);
+        b.Fill(0, g - 4, 0, 20, g - 1, 20, "minecraft:sandstone");
         // The hidden chamber, twelve blocks down: four chests and the TNT under the pressure plate.
         b.Fill(7, 0, 7, 13, g - 1, 13, "minecraft:sandstone");
         b.Fill(8, 2, 8, 12, 5, 12, "minecraft:air");
@@ -215,7 +224,10 @@ namespace perlite::structure {
         const int turns = r.NextInt(4);
         int ox, oz;
         Turned(turns, 10, 10, ox, oz);
-        AddPiece(start, b.Done(), turns, x + 10 - ox, ground - g - 1, z + 10 - oz);
+        AddPiece(start, b.Done(), turns, x + 10 - ox, floorY - g, z + 10 - oz);
+        // Propped from under the base down (the chamber itself sits inside the ground).
+        start.pieces.back().fillDown = "minecraft:sandstone";
+        start.pieces.back().fillTop = floorY - 5;
         return true;
     }
 

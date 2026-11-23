@@ -31,6 +31,8 @@ namespace perlite::structure {
         bool terrainMatching = false; // follows the ground (village streets) instead of keeping its shape
         bool legacy = false;          // its air does not replace what is there
         int ground = 1;               // the game's ground level delta
+        std::string fillDown;         // a block the piece's footprint is propped up on, down to the ground
+        int fillTop = 0;              // the height that propping starts from (going down)
     };
 
     // A structure as generated at its start chunk.

@@ -22,9 +22,21 @@ namespace perlite {
         }
         if (hostile && !target && server.Config().difficulty > 0 && m.age % 10 == 0)
             if (Session* s = Nearest(m, d.flags & mobflag::Ranged ? 16.0 : 24.0, true)) {
-                if (MobRegistry::Instance().BehaviorOf(m.def).AutoTargets(m))
-                    m.target = s->Id(), target = s;
+                // nearest_attackable_target with must_see: a player behind a wall is not picked.
+                if (MobRegistry::Instance().BehaviorOf(m.def).AutoTargets(m) && CanSee(m, s->X(), s->Y(), s->Z()))
+                    m.target = s->Id(), target = s, m.unseenTicks = 0;
             }
+        // A target out of sight for long enough (must_see_forget_duration, three seconds by
+        // default) is let go, unless the mob was hurt by it.
+        if (target && hostile && !m.angry && m.age % 5 == 0) {
+            if (CanSee(m, target->X(), target->Y(), target->Z()))
+                m.unseenTicks = 0;
+            else if ((m.unseenTicks += 5) >= (d.id == std::string_view("minecraft:zombie") || d.id == std::string_view("minecraft:husk") ? 340 : 60)) {
+                m.target = 0;
+                target = nullptr;
+                m.unseenTicks = 0;
+            }
+        }
         if (server.Config().difficulty == 0 && hostile && !m.persistent) {
             m.health = 0;
             return;
@@ -59,16 +71,19 @@ namespace perlite {
                 }
             }
             if (d.flags & mobflag::Ranged) {
-                m.hasGoal = dist > 10.0;
+                // ranged_attack: walk in while the target is past the attack range or out of
+                // sight, stand and shoot once in range and seen.
+                const bool seen = m.age % 2 == 0 ? (m.sees = CanSee(m, target->X(), target->Y(), target->Z())) : m.sees;
+                m.hasGoal = dist > 15.0 || !seen;
                 m.goalX = target->X();
                 m.goalZ = target->Z();
                 m.goalY = target->Y();
                 if (m.shootCooldown > 0)
                     m.shootCooldown--;
-                else if (dist <= 15.0) {
+                else if (dist <= 15.0 && seen) {
                     Shoot(m, *target);
-                    // The vanilla definition: every 3 s, every 2 s on hard.
-                    m.shootCooldown = server.Config().difficulty >= 3 ? 40 : 60;
+                    // The behavior pack's attack_interval: three seconds (min = max = 3).
+                    m.shootCooldown = 60;
                 }
             } else if (m.fuse < 0) {
                 m.goalX = target->X();

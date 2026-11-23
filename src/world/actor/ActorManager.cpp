@@ -1,4 +1,5 @@
 #include "world/actor/ActorInternal.hpp"
+#include <cstdint>
 
 namespace perlite {
     bool BlockSolid(uint16_t id) { return ShapeOf(id).solid; }
@@ -20,6 +21,35 @@ namespace perlite {
         if (!World().Peek({bx >> 4, bz >> 4}))
             return true;
         return BlockSolid(World().GetBlock(bx, by, bz));
+    }
+
+    bool ActorManager::CanSee(const Mob& m, double x, double y, double z) const {
+        const double ey = m.y + MobRegistry::Instance().BodyOf(m).height * 0.85;
+        const double dx = x - m.x, dy = y - ey, dz = z - m.z;
+        const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (len > 128.0)
+            return false;
+        const int steps = static_cast<int>(len / 0.25) + 1;
+        int lx = INT32_MIN, ly = INT32_MIN, lz = INT32_MIN;
+        for (int i = 1; i < steps; i++) {
+            const double t = static_cast<double>(i) / steps;
+            const int bx = static_cast<int>(std::floor(m.x + dx * t)), by = static_cast<int>(std::floor(ey + dy * t)),
+                      bz = static_cast<int>(std::floor(m.z + dz * t));
+            if (bx == lx && by == ly && bz == lz)
+                continue;
+            lx = bx, ly = by, lz = bz;
+            if (!World().Peek({bx >> 4, bz >> 4}))
+                return false;
+            const uint16_t b = World().GetBlock(bx, by, bz);
+            if (BlockSolid(b)) {
+                // Glass, leaves and the like do not block sight in the game.
+                const std::string n = BlockRegistry::Instance().Name(b);
+                if (!n.contains("glass") && !n.contains("leaves") && !n.contains("fence") && !n.contains("bars") &&
+                    !n.contains("slab") && !n.contains("stairs"))
+                    return false;
+            }
+        }
+        return true;
     }
 
     bool ActorManager::Collides(const Mob& m, double x, double y, double z) const {
@@ -135,7 +165,8 @@ namespace perlite {
         {
             const std::string_view id = m.def->id;
             const char* item = nullptr;
-            if (id == "minecraft:skeleton" || id == "minecraft:stray" || id == "minecraft:bogged")
+            if (id == "minecraft:skeleton" || id == "minecraft:stray" || id == "minecraft:bogged" ||
+                id == "minecraft:parched")
                 item = "minecraft:bow";
             else if (id == "minecraft:wither_skeleton")
                 item = "minecraft:stone_sword";
@@ -295,10 +326,11 @@ namespace perlite {
             m.lastHead = m.headYaw;
         }
         const uint64_t flags = Flags(m);
-        if (flags != m.lastFlags || force) {
+        if (flags != m.lastFlags || m.target != m.lastTarget || force) {
             for (Session* s : players)
                 s->MobData(m);
             m.lastFlags = flags;
+            m.lastTarget = m.target;
         }
     }
 
