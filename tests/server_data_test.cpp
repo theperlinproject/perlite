@@ -25,6 +25,8 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
+#include <fstream>
 #include <sstream>
 #include <string>
 
@@ -344,26 +346,95 @@ int main(int argc, char** argv) {
     } else {
         std::printf("server_data_test: PERLITE_VANILLA_PACK not set, skipping the checks against the real pack\n");
     }
-    // Only the structure templates and loot tables of a server download are kept.
+    // Only the vanilla behavior packs of a server download are kept, merged in version order with
+    // their packed folders unpacked.
     {
+        // A .brarchive with two entries.
+        const auto archive = [](const std::vector<std::pair<std::string, std::string>>& files) {
+            std::string out(16 + files.size() * 256, '\0');
+            const uint64_t magic = 0x267052A0B125277DULL;
+            std::memcpy(out.data(), &magic, 8);
+            const uint32_t n = static_cast<uint32_t>(files.size()), version = 1;
+            std::memcpy(out.data() + 8, &n, 4);
+            std::memcpy(out.data() + 12, &version, 4);
+            uint32_t offset = 0;
+            std::string body;
+            for (size_t i = 0; i < files.size(); i++) {
+                char* e = out.data() + 16 + i * 256;
+                e[0] = static_cast<char>(files[i].first.size());
+                std::memcpy(e + 1, files[i].first.data(), files[i].first.size());
+                const uint32_t size = static_cast<uint32_t>(files[i].second.size());
+                std::memcpy(e + 248, &offset, 4);
+                std::memcpy(e + 252, &size, 4);
+                offset += size;
+                body += files[i].second;
+            }
+            return out + body;
+        };
         mz_zip_archive zip{};
         CHECK(mz_zip_writer_init_heap(&zip, 0, 0));
-        const std::string body = "x";
-        for (const char* name : {"bedrock_server", "behavior_packs/vanilla/structures/village/plains/a.nbt",
-                                 "behavior_packs/vanilla/loot_tables/chests/b.json", "behavior_packs/vanilla/entities.brarchive"})
-            mz_zip_writer_add_mem(&zip, name, body.data(), body.size(), MZ_DEFAULT_COMPRESSION);
+        const auto add = [&](const std::string& name, const std::string& body) {
+            mz_zip_writer_add_mem(&zip, name.c_str(), body.data(), body.size(), MZ_DEFAULT_COMPRESSION);
+        };
+        add("bedrock_server", "x");
+        add("behavior_packs/vanilla/structures/village/plains/a.nbt", "x");
+        add("behavior_packs/vanilla/loot_tables/chests/b.json", "{}");
+        add("behavior_packs/vanilla/__brarchive/entities.brarchive", archive({{"pig.json", "old"}, {"cow.json", "cow"}}));
+        add("behavior_packs/vanilla/__brarchive/shapes.brarchive", archive({{"anvil.json", "{}"}}));
+        add("behavior_packs/vanilla_1.21.0/__brarchive/entities.brarchive", archive({{"pig.json", "new"}}));
+        add("behavior_packs/vanilla_1.21.0/structures/trial_chambers/c.nbt", "x");
+        add("behavior_packs/editor/__brarchive/entities.brarchive", archive({{"editor.json", "no"}}));
+        add("resource_packs/vanilla/textures/x.png", "no");
         void* data = nullptr;
         size_t size = 0;
         CHECK(mz_zip_writer_finalize_heap_archive(&zip, &data, &size));
-        const std::string bytes(static_cast<const char*>(data), size);
+        const auto tmp = std::filesystem::temp_directory_path();
+        const std::string zipPath = (tmp / "perlite_bds_test.zip").string();
+        {
+            std::ofstream f(zipPath, std::ios::binary);
+            f.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
+        }
+        mz_free(data);
         mz_zip_writer_end(&zip);
-        const std::string target = (std::filesystem::temp_directory_path() / "perlite_bds_extract").string();
+        const std::string target = (tmp / "perlite_bds_extract").string();
         size_t kept = 0;
         std::string err;
-        CHECK(perlite::vanillapack::ExtractStructures(bytes, target, kept, err));
-        CHECK(kept == 2);
+        CHECK(perlite::vanillapack::ExtractPack(zipPath, target, kept, err));
+        std::string text;
+        CHECK(perlite::file::Read(target + "/entities/pig.json", text) && text == "new");
+        CHECK(perlite::file::Read(target + "/entities/cow.json", text) && text == "cow");
+        CHECK(std::filesystem::exists(target + "/shapes/anvil.json"));
         CHECK(std::filesystem::exists(target + "/structures/village/plains/a.nbt"));
-        CHECK(!std::filesystem::exists(target + "/bedrock_server"));
+        CHECK(std::filesystem::exists(target + "/structures/trial_chambers/c.nbt"));
+        CHECK(!std::filesystem::exists(target + "/entities/editor.json"));
+        CHECK(!std::filesystem::exists(target + "/bedrock_server") && !std::filesystem::exists(target + "/textures"));
+        CHECK(perlite::vanillapack::HasStructures(target));
+        std::filesystem::remove_all(target);
+        std::filesystem::remove(zipPath);
+    }
+
+    // A real server download, when one is given: the kept pack must have what the server reads.
+    if (const char* bds = std::getenv("PERLITE_BDS_ZIP"); bds && *bds) {
+        const std::string target = (std::filesystem::temp_directory_path() / "perlite_bds_real").string();
+        size_t kept = 0;
+        std::string err;
+        CHECK(perlite::vanillapack::ExtractPack(bds, target, kept, err));
+        std::printf("kept %zu files from %s%s\n", kept, bds, err.empty() ? "" : (" (" + err + ")").c_str());
+        CHECK(perlite::vanillapack::HasStructures(target));
+        CHECK(std::filesystem::exists(target + "/structures/trial_chambers"));
+        CHECK(perlite::VanillaEntities::Instance().Load(target) > 100);
+        CHECK(perlite::VoxelShapes::Instance().Load(target) > 100);
+        std::printf("entities %zu\n", perlite::VanillaEntities::Instance().Load(target));
+        // The compiled shape reads the same as the JSON one of the same block.
+        std::string compiled, id;
+        std::vector<perlite::VoxelBox> boxes;
+        CHECK(perlite::file::Read(target + "/shapes/fence.json", compiled) &&
+              perlite::VoxelShapes::ParseShape(compiled, id, boxes) && id == "minecraft:fence" && boxes.size() == 1 &&
+              std::abs(boxes[0].min[0] - 0.375f) < 1e-6f && std::abs(boxes[0].max[1] - 1.0f) < 1e-6f);
+        if (const char* keep = std::getenv("PERLITE_BDS_KEEP"); keep && *keep) {
+            std::filesystem::remove_all(keep);
+            std::filesystem::rename(target, keep);
+        }
         std::filesystem::remove_all(target);
     }
 

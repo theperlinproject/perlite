@@ -4,6 +4,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 
@@ -131,12 +132,37 @@ namespace perlite::https {
             buffer.erase(0, n);
             return true;
         }
+
+        // Hands n body bytes to the sink as they arrive, with no size limit (big downloads).
+        bool Stream(size_t n, const Sink& sink) {
+            char chunk[65536];
+            if (!buffer.empty()) {
+                const size_t take = std::min(n, buffer.size());
+                if (!sink(buffer.data(), take))
+                    return false;
+                buffer.erase(0, take);
+                n -= take;
+            }
+            while (n > 0) {
+                const int got = BIO_read(bio, chunk, static_cast<int>(std::min(n, sizeof chunk)));
+                if (got <= 0)
+                    return false;
+                if (!sink(chunk, static_cast<size_t>(got)))
+                    return false;
+                n -= static_cast<size_t>(got);
+            }
+            return true;
+        }
     };
 
     Client::Client(std::string host) : host(std::move(host)), impl(std::make_unique<Impl>()) {}
     Client::~Client() = default;
 
     bool Client::Get(const std::string& path, Response& out, std::string* error) {
+        return Get(path, out, nullptr, error);
+    }
+
+    bool Client::Get(const std::string& path, Response& out, const Sink* sink, std::string* error) {
         out = {};
         for (int attempt = 0; attempt < 2; attempt++) {
             const bool reused = impl->bio != nullptr;
@@ -183,6 +209,15 @@ namespace perlite::https {
                     out.location = value;
             }
             bool ok = true;
+            // A redirect or an error page is kept in the body; only a 2xx body goes to the sink.
+            const Sink* to = out.status >= 200 && out.status < 300 ? sink : nullptr;
+            if (to) {
+                out.length = length;
+                if (!(*to)(nullptr, 0)) { // a zero-length call announces the start
+                    impl->Close();
+                    return false;
+                }
+            }
             if (chunked) {
                 for (;;) {
                     std::string size;
@@ -196,20 +231,29 @@ namespace perlite::https {
                         }
                         break;
                     }
-                    if (out.body.size() + n > kMaxBody || !impl->Take(n, out.body) || !impl->ReadLine(line)) {
+                    if (to ? !impl->Stream(n, *to) || !impl->ReadLine(line)
+                           : out.body.size() + n > kMaxBody || !impl->Take(n, out.body) || !impl->ReadLine(line)) {
                         ok = false;
                         break;
                     }
                 }
             } else if (length >= 0) {
-                ok = impl->Take(static_cast<size_t>(length), out.body);
+                ok = to ? impl->Stream(static_cast<size_t>(length), *to) : impl->Take(static_cast<size_t>(length), out.body);
             } else {
                 char chunk[16384];
-                out.body = std::move(impl->buffer);
+                std::string first = std::move(impl->buffer);
                 impl->buffer.clear();
-                int got;
-                while (out.body.size() < kMaxBody && (got = BIO_read(impl->bio, chunk, sizeof chunk)) > 0)
-                    out.body.append(chunk, static_cast<size_t>(got));
+                if (to) {
+                    ok = first.empty() || (*to)(first.data(), first.size());
+                    int got;
+                    while (ok && (got = BIO_read(impl->bio, chunk, sizeof chunk)) > 0)
+                        ok = (*to)(chunk, static_cast<size_t>(got));
+                } else {
+                    out.body = std::move(first);
+                    int got;
+                    while (out.body.size() < kMaxBody && (got = BIO_read(impl->bio, chunk, sizeof chunk)) > 0)
+                        out.body.append(chunk, static_cast<size_t>(got));
+                }
                 close = true;
             }
             if (!ok || close)
@@ -222,6 +266,10 @@ namespace perlite::https {
     }
 
     bool Get(const std::string& url, Response& out, std::string* error) {
+        return Get(url, out, nullptr, error);
+    }
+
+    bool Get(const std::string& url, Response& out, const Sink* sink, std::string* error) {
         std::string current = url;
         for (int hop = 0; hop < 6; hop++) {
             std::string host, path;
@@ -231,7 +279,7 @@ namespace perlite::https {
                 return false;
             }
             Client client(host);
-            if (!client.Get(path, out, error))
+            if (!client.Get(path, out, sink, error))
                 return false;
             if (out.status < 300 || out.status >= 400 || out.location.empty())
                 return true;

@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
         int sx = 0, sz = 0;
         const auto t0 = std::chrono::steady_clock::now();
         const std::string_view tv(type);
-        const int radius = tv == "mansion" || tv == "desert_pyramid" ? 400 : tv == "buried_treasure" || tv == "mineshaft" ? 60 : 160;
+        const int radius = tv == "mansion" ? 800 : tv == "desert_pyramid" || tv == "swamp_hut" ? 400 : tv == "buried_treasure" || tv == "mineshaft" ? 60 : 160;
         const bool ok = gen.Locate(type, 0, 0, radius, sx, sz);
         size_t n = 0;
         if (ok)

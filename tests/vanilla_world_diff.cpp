@@ -10,6 +10,7 @@
 #include "world/level/block/BlockCatalog.hpp"
 #include "world/level/block/Blocks.hpp"
 #include "world/level/levelgen/vanilla/VanillaTerrain.hpp"
+#include "world/level/levelgen/vanilla/BiomeData.hpp"
 #include "world/level/storage/WorldStorage.hpp"
 
 #include <algorithm>
@@ -31,6 +32,24 @@ namespace {
             n == "minecraft:flowing_lava")
             return Shape::Liquid;
         return Shape::Solid;
+    }
+    // Terrain shape: what is not part of the ground (plants, trees, vines, snow, decorations) counts
+    // as air, so the comparison shows the land, caves and water alone.
+    Shape TerrainShapeOf(const std::string& n) {
+        static const char* const loose[] = {"leaves", "_log", "wood", "grass", "fern", "flower", "vine", "kelp", "seagrass", "moss_carpet",
+                                            "snow_layer", "bush", "mushroom", "dripleaf", "azalea", "lichen", "roots", "spore", "pointed_dripstone",
+                                            "sculk_vein", "litter", "petals", "sugar", "reeds", "cactus", "sapling", "tulip", "poppy", "dandelion",
+                                            "torch", "pumpkin", "melon", "bamboo", "cocoa", "pickle", "coral", "amethyst_cluster", "bud", "web"};
+        if (n.ends_with("grass_block"))
+            return Shape::Solid;
+        // Underwater plants stand in water.
+        if (n.find("kelp") != std::string::npos || n.find("seagrass") != std::string::npos || n.find("sea_pickle") != std::string::npos ||
+            n.find("coral") != std::string::npos)
+            return Shape::Liquid;
+        for (const char* l : loose)
+            if (n.find(l) != std::string::npos)
+                return n.find("water") != std::string::npos ? Shape::Liquid : Shape::Air;
+        return ShapeOf(n);
     }
     int TopSolid(const ChunkColumn& c, int x, int z, const BlockRegistry& r) {
         for (int y = kMinY + kHeight - 1; y >= kMinY; y--)
@@ -86,6 +105,11 @@ int main(int argc, char** argv) {
     std::map<std::pair<std::string, std::string>, uint64_t> confusion;
     std::vector<int> heightDiff;
     std::map<std::string, std::pair<uint64_t, uint64_t>> perBlock;  // reference name -> (count, matched)
+    uint64_t quarts = 0, quartsSame = 0, terrainSame = 0;
+    std::map<int, std::pair<uint64_t, uint64_t>> terrainByY; // y / 16 -> (cells, differing)
+    std::map<std::pair<std::string, std::string>, uint64_t> terrainConfusion;
+    std::map<std::pair<std::string, std::string>, uint64_t> biomeConfusion;
+    std::map<std::string, std::pair<uint64_t, uint64_t>> blocksOurs; // name -> (reference count, our count)
     for (int cx = x0; cx <= x1; cx++)
         for (int cz = z0; cz <= z1; cz++) {
             ChunkColumn ref;
@@ -101,6 +125,16 @@ int main(int argc, char** argv) {
                         region[DecorationSlot(dx, dz)] = &rawAt(cx + dx, cz + dz);
                 backend->Decorate({cx, cz}, region, ours);
             }
+            for (int qx = 0; qx < 4; qx++)
+                for (int qz = 0; qz < 4; qz++)
+                    for (int qy = 0; qy < ChunkColumn::kQuartLayers; qy++) {
+                        const int a = ref.QuartBiome(qx, qy, qz), b = ours.QuartBiome(qx, qy, qz);
+                        quarts++;
+                        if (a == b)
+                            quartsSame++;
+                        else if (a >= 0 && a < vanilla::kBiomeCount && b >= 0 && b < vanilla::kBiomeCount)
+                            biomeConfusion[{vanilla::kBiomes[a].bedrock, vanilla::kBiomes[b].bedrock}]++;
+                    }
             for (int x = 0; x < 16; x++)
                 for (int z = 0; z < 16; z++) {
                     heightDiff.push_back(TopSolid(ours, x, z, r) - TopSolid(ref, x, z, r));
@@ -109,6 +143,19 @@ int main(int argc, char** argv) {
                         cells++;
                         const std::string na = r.Name(a), nb = r.Name(b);
                         const Shape sa = ShapeOf(na), sb = ShapeOf(nb);
+                        {
+                            const Shape ta = TerrainShapeOf(na), tb = TerrainShapeOf(nb);
+                            auto& by = terrainByY[(y - kMinY) / 16];
+                            by.first++;
+                            if (ta == tb)
+                                terrainSame++;
+                            else {
+                                by.second++;
+                                terrainConfusion[{na, nb}]++;
+                            }
+                        }
+                        blocksOurs[na].first++;
+                        blocksOurs[nb].second++;
                         auto& pb = perBlock[na];
                         pb.first++;
                         if (a == b) {
@@ -202,6 +249,41 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < std::min<size_t>(20, top.size()); i++)
         std::printf("  %9llu  %s -> %s\n", static_cast<unsigned long long>(top[i].first), top[i].second.first.c_str() + 10,
                     top[i].second.second.c_str() + 10);
+    std::printf("terrain shape (air / liquid / solid, plants and trees as air): %.3f%% the same\n", pct(terrainSame, cells));
+    for (const auto& [sec, v] : terrainByY)
+        if (v.second)
+            std::printf("  y %4d..%4d: %.3f%% differ\n", kMinY + sec * 16, kMinY + sec * 16 + 15, pct(v.second, v.first));
+    {
+        std::vector<std::pair<uint64_t, std::pair<std::string, std::string>>> tt;
+        for (const auto& [k, v] : terrainConfusion)
+            tt.push_back({v, k});
+        std::sort(tt.rbegin(), tt.rend());
+        for (size_t i = 0; i < std::min<size_t>(15, tt.size()); i++)
+            std::printf("  %9llu  %s -> %s\n", static_cast<unsigned long long>(tt[i].first), tt[i].second.first.c_str() + 10,
+                        tt[i].second.second.c_str() + 10);
+    }
+    std::printf("biomes: %.2f%% of quarts the same\n", pct(quartsSame, quarts));
+    {
+        std::vector<std::pair<uint64_t, std::pair<std::string, std::string>>> bt;
+        for (const auto& [k, v] : biomeConfusion)
+            bt.push_back({v, k});
+        std::sort(bt.rbegin(), bt.rend());
+        for (size_t i = 0; i < std::min<size_t>(10, bt.size()); i++)
+            std::printf("  %9llu  %s -> %s\n", static_cast<unsigned long long>(bt[i].first), bt[i].second.first.c_str(),
+                        bt[i].second.second.c_str());
+    }
+    std::printf("block counts, reference vs ours (largest gaps first):\n");
+    {
+        std::vector<std::pair<int64_t, std::string>> gaps;
+        for (const auto& [k, v] : blocksOurs)
+            gaps.push_back({std::llabs(static_cast<long long>(v.first) - static_cast<long long>(v.second)), k});
+        std::sort(gaps.rbegin(), gaps.rend());
+        for (size_t i = 0; i < std::min<size_t>(25, gaps.size()); i++) {
+            const auto& v = blocksOurs[gaps[i].second];
+            std::printf("  %-28s %9llu %9llu\n", gaps[i].second.c_str() + 10, static_cast<unsigned long long>(v.first),
+                        static_cast<unsigned long long>(v.second));
+        }
+    }
     std::printf("agreement by reference block (most common first):\n");
     std::vector<std::pair<uint64_t, std::string>> blocks;
     for (const auto& [k, v] : perBlock)

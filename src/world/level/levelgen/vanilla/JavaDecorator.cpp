@@ -957,6 +957,12 @@ namespace perlite::vanilla {
             bool CanPlaceOre(uint16_t id, const json::Value& target, float discard, const Pos& p) {
                 if (!RuleTest(target["target"], id, p))
                     return false;
+                // Bedrock's clay ore (the vanilla pack's clay_ore_feature) replaces stone only, not
+                // deepslate or the other stones the Java rule allows.
+                static const uint16_t clay = BlockCatalog::Instance().DefaultBlock("minecraft:clay");
+                static const uint16_t stone = BlockCatalog::Instance().DefaultBlock("minecraft:stone");
+                if (StateId(target["state"]) == clay && id != stone)
+                    return false;
                 if (discard <= 0.0f)
                     return true;
                 if (discard < 1.0f && r.NextFloat() >= discard)

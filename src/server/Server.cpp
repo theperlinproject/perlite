@@ -134,10 +134,11 @@ namespace perlite {
                 }
             }
             BuildItemPackets();
+            // Mob sizes, scale, health and speed, the block shapes, recipes, structures and loot
+            // come from Mojang's vanilla behavior pack, kept from the Bedrock Dedicated Server
+            // download on first start (it is not shipped with Perlite).
+            const std::string pack = vanillapack::Ensure(config.dataDir, config.downloadVanillaPack || config.downloadStructures);
             {
-                // Mob sizes, scale, health and speed, and the block shapes, come from Mojang's vanilla
-                // behavior pack, downloaded on first start (it is not shipped with Perlite).
-                const std::string pack = vanillapack::Ensure(config.dataDir, config.downloadVanillaPack);
                 Recipes::Instance().SetPackDir(pack);
                 const size_t read = VanillaEntities::Instance().Load(pack);
                 if (read > 0) {
@@ -153,12 +154,11 @@ namespace perlite {
                 else
                     LogWarn("No block shapes (they come from the vanilla behavior pack): clients use full cubes");
             }
-            // Structure templates and chest loot: a pack beside the server, or the one kept from
-            // the latest Bedrock Dedicated Server (downloaded on first start).
+            // Structure templates and chest loot: a pack beside the server, or the vanilla pack
+            // kept from the Bedrock Dedicated Server download.
             if (config.structurePack.empty() && !structure::TemplateStore::Find("", config.dataDir)) {
-                const std::string kept = vanillapack::EnsureStructures(config.dataDir, config.downloadStructures);
-                if (!kept.empty())
-                    config.structurePack = kept;
+                if (vanillapack::HasStructures(pack))
+                    config.structurePack = pack;
                 else
                     LogWarn("No structure templates: villages, bastions and other template structures will not generate");
             }

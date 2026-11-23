@@ -293,15 +293,17 @@ namespace perlite {
              "leveldb saves the world in worlds/<level-name>; none keeps it in memory only."},
             {"perlite-autosave-seconds", "300", "Seconds between automatic saves. 0 saves only on stop and /save."},
             {"perlite-download-vanilla-pack", "true",
-             "Download Mojang's vanilla behavior pack (mob sizes, block shapes) from bedrock-samples on GitHub."},
+             "Download the latest Bedrock Dedicated Server from minecraft.net on first start and keep only its vanilla "
+             "behavior packs (mobs, block shapes, recipes, structures, loot); the Minecraft EULA applies: "
+             "https://www.minecraft.net/eula."},
             {"perlite-generator", "vanilla", "Terrain for new chunks: vanilla or flat."},
             {"perlite-flat-layers", "minecraft:bedrock*1,minecraft:dirt*2,minecraft:grass_block*1",
              "Layers of a flat world, bottom up: block*count separated by commas."},
             {"perlite-plugin-dir", "", "Folder with plugins. Empty uses plugins/ in the data folder."},
             {"perlite-block-data-dir", "", "Folder with block data. Empty uses the data folder beside the program."},
             {"perlite-download-structures", "true",
-             "When no structure pack is found, download the latest Bedrock Dedicated Server from minecraft.net and keep "
-             "only its structure templates and loot tables (the Minecraft EULA applies: https://www.minecraft.net/eula)."},
+             "Also download the vanilla behavior pack (see perlite-download-vanilla-pack) for its structure templates and "
+             "loot tables; either setting turns the one download on."},
             {"perlite-structure-pack", "",
              "A Bedrock vanilla behavior pack (from your own Bedrock Dedicated Server or game install) whose structures "
              "folder holds the village, outpost, bastion and other templates. Empty looks for behavior_packs/vanilla "

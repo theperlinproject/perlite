@@ -1,5 +1,7 @@
 #include "world/level/block/VoxelShapes.hpp"
 
+#include <cstring>
+
 #include "common/FileIo.hpp"
 #include "common/Json.hpp"
 #include "common/Log.hpp"
@@ -17,7 +19,58 @@ namespace perlite {
         return shapes;
     }
 
+    namespace {
+        // The dedicated server's packs keep shapes in the game's compiled form: "\x7fMCB", a
+        // 2-byte version, a 2-byte schema and a 4-byte format, then the definition's fields in
+        // order: the type name and the identifier (varint-length strings), the box count (varint)
+        // and six floats per box (min x, y, z, max x, y, z) in sixteenths.
+        bool ParseCompiledShape(const std::string& d, std::string& identifier, std::vector<VoxelBox>& boxes) {
+            size_t p = 12;
+            const auto varint = [&](uint64_t& out) {
+                out = 0;
+                for (int shift = 0; shift < 35; shift += 7) {
+                    if (p >= d.size())
+                        return false;
+                    const uint8_t b = static_cast<uint8_t>(d[p++]);
+                    out |= static_cast<uint64_t>(b & 0x7F) << shift;
+                    if (!(b & 0x80))
+                        return true;
+                }
+                return false;
+            };
+            uint64_t len = 0;
+            if (!varint(len) || p + len > d.size())
+                return false;
+            const std::string type = d.substr(p, len);
+            p += len;
+            if (type != "minecraft:voxel_shape" || !varint(len) || p + len > d.size())
+                return false;
+            identifier = d.substr(p, len);
+            p += len;
+            uint64_t count = 0;
+            if (!varint(count) || p + count * 24 != d.size())
+                return false;
+            boxes.clear();
+            for (uint64_t i = 0; i < count; i++) {
+                VoxelBox b;
+                std::memcpy(b.min, d.data() + p, 12);
+                std::memcpy(b.max, d.data() + p + 12, 12);
+                p += 24;
+                for (int axis = 0; axis < 3; axis++) {
+                    b.min[axis] /= 16.0f;
+                    b.max[axis] /= 16.0f;
+                    if (b.min[axis] > b.max[axis])
+                        std::swap(b.min[axis], b.max[axis]);
+                }
+                boxes.push_back(b);
+            }
+            return !identifier.empty();
+        }
+    }
+
     bool VoxelShapes::ParseShape(const std::string& text, std::string& identifier, std::vector<VoxelBox>& boxes) {
+        if (text.size() >= 12 && text.compare(0, 4, "\x7fMCB") == 0)
+            return ParseCompiledShape(text, identifier, boxes);
         json::Value root;
         if (!json::Parse(text, root))
             return false;

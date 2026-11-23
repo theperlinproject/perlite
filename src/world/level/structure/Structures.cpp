@@ -13,6 +13,7 @@
 #include "world/level/levelgen/vanilla/BiomeData.hpp"
 #include "world/level/levelgen/vanilla/JavaRandom.hpp"
 
+#include <random>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -62,6 +63,9 @@ namespace perlite::structure {
         const Set* exclusion = nullptr;
         int exclusionChunks = 0;
         std::vector<Def> structures;
+        // Bedrock's spread: the region's start drawn with a Mersenne Twister seeded from the region
+        // (the same formula as the large-feature seed, truncated to 32 bits).
+        bool bedrock = false;
     };
 
     namespace {
@@ -184,6 +188,45 @@ namespace perlite::structure {
                     d.biomes = {"soul_sand_valley"};
                     s.push_back({"nether_fossils", kNether, 2, 1, 14357921, false, 1.0f, 0, nullptr, 0, {d}});
                 }
+                // Where Bedrock places a set differently from the Java game, its own spread. These
+                // were measured against the Bedrock Dedicated Server's /locate (seed 12345, twenty
+                // places a type): every located start falls on the start these give.
+                const auto bedrock = [&](const char* name, int spacing, int separation, int salt, bool triangular) {
+                    for (Set& set : s)
+                        if (std::string_view(set.name) == name) {
+                            set.spacing = spacing;
+                            set.separation = separation;
+                            set.salt = salt;
+                            set.triangular = triangular;
+                            set.frequency = 1.0f;
+                            set.frequencyMethod = 0;
+                            set.bedrock = true;
+                        }
+                };
+                bedrock("villages", 34, 8, 10387312, true);
+                bedrock("pillager_outposts", 80, 24, 165745296, true);
+                bedrock("shipwrecks", 24, 4, 165745295, false);
+                bedrock("ocean_monuments", 32, 5, 10387313, true);
+                bedrock("woodland_mansions", 80, 20, 10387319, true);
+                bedrock("ancient_cities", 24, 8, 20083232, true);
+                bedrock("ocean_ruins", 20, 8, 14357621, false);
+                bedrock("buried_treasures", 4, 2, 16842397, true);
+                bedrock("ruined_portals", 40, 15, 40552231, false);
+                // Desert pyramids, jungle temples, swamp huts and igloos are one set in Bedrock (its
+                // "temple"): the start's biome decides which is built.
+                {
+                    Set temples{"temples", kOverworld, 32, 8, 14357617, false, 1.0f, 0, nullptr, 0, {}};
+                    temples.bedrock = true;
+                    for (const char* name : {"desert_pyramids", "jungle_temples", "swamp_huts", "igloos"})
+                        for (auto it = s.begin(); it != s.end(); ++it)
+                            if (std::string_view(it->name) == name) {
+                                for (Def& d : it->structures)
+                                    temples.structures.push_back(std::move(d));
+                                s.erase(it);
+                                break;
+                            }
+                    s.push_back(std::move(temples));
+                }
                 return s;
             }();
             return sets;
@@ -215,6 +258,23 @@ namespace perlite::structure {
         // The start chunk of the region a chunk is in (the game's random spread placement).
         std::pair<int, int> PotentialStart(const Set& set, int64_t seed, int chunkX, int chunkZ) {
             const int rx = FloorDiv(chunkX, set.spacing), rz = FloorDiv(chunkZ, set.spacing);
+            if (set.bedrock) {
+                const uint64_t s = static_cast<uint64_t>(static_cast<int64_t>(rx)) * 341873128712ull +
+                                   static_cast<uint64_t>(static_cast<int64_t>(rz)) * 132897987541ull + static_cast<uint64_t>(seed) +
+                                   static_cast<uint64_t>(static_cast<int64_t>(set.salt));
+                std::mt19937 mt(static_cast<uint32_t>(s));
+                const uint32_t k = static_cast<uint32_t>(set.spacing - set.separation);
+                const auto spread = [&] {
+                    if (!set.triangular)
+                        return static_cast<int>(mt() % k);
+                    const uint32_t a = mt() % k;
+                    const uint32_t b = mt() % k;
+                    return static_cast<int>((a + b) / 2);
+                };
+                const int ox = spread();
+                const int oz = spread();
+                return {rx * set.spacing + ox, rz * set.spacing + oz};
+            }
             WorldRandom r = WithSalt(seed, rx, rz, set.salt);
             const int k = set.spacing - set.separation;
             const auto spread = [&] { return set.triangular ? (r.NextInt(k) + r.NextInt(k)) / 2 : r.NextInt(k); };
@@ -694,12 +754,34 @@ namespace perlite::structure {
         return out;
     }
 
+    namespace {
+        // A /locate name against a structure: the game's names, and Bedrock's group names
+        // ("temple" for the four scattered temples, "ruins" for ocean ruins).
+        bool TypeMatches(const std::string& type, std::string_view name) {
+            if (type == name)
+                return true;
+            if (type == "village")
+                return name.starts_with("village");
+            if (type == "temple")
+                return name == "desert_pyramid" || name == "jungle_pyramid" || name == "swamp_hut" || name == "igloo";
+            if (type == "ruins" || type == "ocean_ruins")
+                return name == "ocean_ruin";
+            if (type == "fortress")
+                return name == "fortress";
+            if (type == "bastion" || type == "bastion_remnant")
+                return name == "bastion_remnant";
+            if (type == "endcity" || type == "end_city")
+                return name == "end_city";
+            return false;
+        }
+    }
+
     bool StructureGenerator::Locate(const std::string& type, int x, int z, int radius, int& outX, int& outZ) {
         const int cx = x >> 4, cz = z >> 4;
         for (const Set* set : sets) {
             bool has = false;
             for (const Def& d : set->structures)
-                has = has || type == d.name || (type == "village" && std::string_view(d.name).starts_with("village"));
+                has = has || TypeMatches(type, d.name);
             if (!has)
                 continue;
             double best = 1e300;
@@ -727,7 +809,7 @@ namespace perlite::structure {
                     if (d >= best)
                         continue;
                     const auto start = StartAt(*set, sx, sz);
-                    if (!start || (type != start->type && !(type == "village" && start->type.starts_with("village"))))
+                    if (!start || !TypeMatches(type, start->type))
                         continue;
                     best = d;
                     outX = (start->box.x0 + start->box.x1) / 2;

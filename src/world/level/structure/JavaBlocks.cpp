@@ -101,7 +101,8 @@ namespace perlite::structure {
         // Java name to Bedrock name, for the names that differ (after the legacy variants are folded in).
         std::string RenameBlock(const std::string& n) {
             static const std::unordered_map<std::string, std::string> kRename = {
-                {"grass", "short_grass"}, {"dirt_path", "grass_path"}, {"cave_air", "air"}, {"void_air", "air"},
+                {"grass", "short_grass"}, {"dirt_path", "grass_path"}, {"tripwire", "trip_wire"},
+                {"waxed_copper_block", "waxed_copper"}, {"cave_air", "air"}, {"void_air", "air"},
                 {"spawner", "mob_spawner"}, {"cobweb", "web"}, {"lily_pad", "waterlily"}, {"terracotta", "hardened_clay"},
                 {"bricks", "brick_block"}, {"melon", "melon_block"}, {"magma_block", "magma"}, {"snow_block", "snow"},
                 {"note_block", "noteblock"}, {"oak_door", "wooden_door"}, {"oak_fence_gate", "fence_gate"},
@@ -331,6 +332,15 @@ namespace perlite::structure {
             if (n == "campfire" || n == "soul_campfire") {
                 p["minecraft:cardinal_direction"] = facing.empty() ? "north" : facing;
                 p["extinguished"] = Bit(s.Get("lit") == "false");
+                return p;
+            }
+            if (n == "trip_wire") {
+                p["attached_bit"] = Bit(True(s, "attached"));
+                p["disarmed_bit"] = Bit(True(s, "disarmed"));
+                p["powered_bit"] = Bit(True(s, "powered"));
+                p["suspended_bit"] = Bit(true);
+                for (const char* side : {"north", "east", "south", "west"})
+                    p[std::string("minecraft:connection_") + side] = Bit(True(s, side));
                 return p;
             }
             if (n == "unpowered_repeater" || n == "unpowered_comparator") {

@@ -108,6 +108,7 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories(dir);
     SetLogThreadName("Server thread");
     OpenLogFile(dir + "/logs");
+    LogInfo("By running this software you accept the Minecraft EULA: https://www.minecraft.net/eula");
     LogInfo("Starting Minecraft: Bedrock Edition server version 1.26.60 (protocol 2225)");
     LogInfo("Loading properties");
 
