@@ -2,6 +2,9 @@ include_guard(GLOBAL)
 
 include(CPM)
 include(PerlinApiPackage)
+if(PERLITE_PERLIN_REV3)
+    add_compile_definitions(PERLITE_PERLIN_REV3=1)
+endif()
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 

@@ -18,6 +18,10 @@ namespace perlite {
         // From the vanilla behavior pack when it is found: how the client scales the model, and the
         // baby's own box and scale (0: half the adult's).
         float scale = 1.0f, babyScale = 0.0f, babyWidth = 0.0f, babyHeight = 0.0f;
+        // A content mod's entity: the entity type clients are shown (null: id), and the vanilla
+        // type whose behaviour it borrows.
+        const char* wireId = nullptr;
+        const char* baseId = nullptr;
     };
 
     const MobDef* FindMob(const char* identifier);

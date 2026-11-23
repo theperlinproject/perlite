@@ -196,8 +196,9 @@ namespace perlite {
                 }
                 // Lit TNT is an entity of its own, not a mob: four seconds of fuse, as in the game.
                 Mob* m = c["entityType"].text == "tnt"
-                             ? Mobs().SpawnPrimedTnt(x, y, z, 80)
-                             : Mobs().Spawn("minecraft:" + c["entityType"].text, x, y, z, true);
+                             ? MobsIn(c.source ? c.source->DimensionId() : kOverworld).SpawnPrimedTnt(x, y, z, 80)
+                             : MobsIn(c.source ? c.source->DimensionId() : kOverworld)
+                                   .Spawn("minecraft:" + c["entityType"].text, x, y, z, true);
                 if (!m) {
                     fail(c.source, "Unable to summon entity");
                     return;
@@ -228,7 +229,9 @@ namespace perlite {
                         if (type.starts_with("minecraft:"))
                             type = type.substr(10);
                     }
-                    const int n = Mobs().KillAll(type);
+                    int n = 0;
+                    for (int d = 0; d < kDimensionCount; d++)
+                        n += MobsIn(d).KillAll(type);
                     if (n == 0)
                         fail(c.source, "No entity was found");
                     else

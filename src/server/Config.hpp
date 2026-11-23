@@ -40,6 +40,7 @@ namespace perlite {
         std::vector<FlatLayer> flatLayers = {
             {"minecraft:bedrock", 1}, {"minecraft:dirt", 2}, {"minecraft:grass_block", 1}};
         std::string terrainBackend = "auto";
+        std::string structurePack; // a Bedrock vanilla behavior pack with structure templates (see Config.cpp)
 
         bool loopbackOnly = false;
 
@@ -75,6 +76,9 @@ namespace perlite {
         std::string worldStorage = "leveldb";
         uint32_t autosaveSeconds = 300;
         bool downloadVanillaPack = true;
+        // Fetch the structure templates and loot tables from the latest Bedrock Dedicated Server when
+        // none are found. On in the shipped server.properties; off for servers configured in code.
+        bool downloadStructures = false;
         std::vector<std::pair<std::string, std::string>> extraProperties;
 
         static ServerConfig LoadDirectory(const std::string& dir, std::string* error = nullptr);

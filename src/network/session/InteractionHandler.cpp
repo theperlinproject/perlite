@@ -128,7 +128,7 @@ namespace perlite {
                     return;
                 }
                 const bool crit = !onGround && fallDistance > 0.0f && !swimming && !gliding && !flying;
-                if (server.Mobs().Attack(*this, on->entityRuntimeId, damage, sprinting ? 0.9f : 0.4f)) {
+                if (server.MobsIn(dimension).Attack(*this, on->entityRuntimeId, damage, sprinting ? 0.9f : 0.4f)) {
                     Exhaust(0.1f);
                     if (crit)
                         for (Session* s : server.PlayersIn(dimension))
@@ -144,7 +144,7 @@ namespace perlite {
                     }
                 }
             } else {
-                server.Mobs().Interact(*this, on->entityRuntimeId);
+                server.MobsIn(dimension).Interact(*this, on->entityRuntimeId);
             }
             return;
         }
@@ -341,8 +341,6 @@ namespace perlite {
                 return;
             DamageHeld(1);
         }
-        if (dimension != kOverworld)
-            return;
         const double yawRad = static_cast<double>(yaw) * 3.14159265358979323846 / 180.0;
         const double pitchRad = static_cast<double>(pitch) * 3.14159265358979323846 / 180.0;
         const double dirX = -std::sin(yawRad) * std::cos(pitchRad), dirY = -std::sin(pitchRad),
@@ -356,7 +354,7 @@ namespace perlite {
         ax /= alen;
         ay /= alen;
         az /= alen;
-        if (Mob* arrow = server.Mobs().SpawnProjectile(projectile::Arrow, posX + dirX * 0.5, posY - 0.1 + dirY * 0.5,
+        if (Mob* arrow = server.MobsIn(dimension).SpawnProjectile(projectile::Arrow, posX + dirX * 0.5, posY - 0.1 + dirY * 0.5,
                                                        posZ + dirZ * 0.5, ax * speed, ay * speed, az * speed,
                                                        runtimeId, pickup)) {
             arrow->crit = charge >= 1.0f;
@@ -471,7 +469,7 @@ namespace perlite {
     // Snowballs, eggs, ender pearls and bottles o' enchanting fly from the eyes the way the player looks.
     bool Session::ThrowHeld() {
         const ItemStack& held = inventory.Held();
-        if (held.Empty() || dimension != kOverworld)
+        if (held.Empty())
             return false;
         const std::string n = ItemNameOf(held.networkId);
         int type = -1;
@@ -497,7 +495,7 @@ namespace perlite {
         const double pitchRad = static_cast<double>(aimPitch) * 3.14159265358979323846 / 180.0;
         const double dirX = -std::sin(yawRad) * std::cos(pitchRad), dirY = -std::sin(pitchRad),
                      dirZ = std::cos(yawRad) * std::cos(pitchRad);
-        server.Mobs().SpawnProjectile(type, posX + dirX * 0.3, posY - 0.1 + dirY * 0.3, posZ + dirZ * 0.3, dirX * speed,
+        server.MobsIn(dimension).SpawnProjectile(type, posX + dirX * 0.3, posY - 0.1 + dirY * 0.3, posZ + dirZ * 0.3, dirX * speed,
                                       dirY * speed, dirZ * speed, runtimeId);
         if (type == projectile::EnderPearl)
             pearlReadyAt = now + 20;

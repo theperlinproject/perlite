@@ -23,7 +23,6 @@ ctest --test-dir build
 |--------|---------|--------------|
 | `PERLITE_NETHERNET` | ON | NetherNet transport (WebRTC), the only way Bedrock 26.60+ clients join. Without it only in-process (loopback) connections work. |
 | `PERLITE_LEVELDB` | ON (OFF on the web) | Save worlds in the Bedrock LevelDB format. |
-| `PERLITE_GPU` | OFF | Generate terrain on the GPU through conduit. |
 | `PERLITE_EMBED` | OFF | Build `perlite_embed`, the server without a wasm runtime, for hosts that bring their own. |
 | `PERLITE_BUILD_EXE`, `PERLITE_BUILD_SHARED`, `PERLITE_BUILD_TESTS` | ON at top level | The executable, the shared library with the C API, the tests. |
 
@@ -42,7 +41,6 @@ Perlite ships with a commented `server.properties` and reads it as it is: there 
 | `perlite-world-storage` | `leveldb` | `leveldb` saves the world in `worlds/<level-name>`; `none` keeps it in memory. |
 | `perlite-autosave-seconds` | `300` | How often the world is saved; 0 saves only on stop and `/save`. |
 | `perlite-generator` | `vanilla` | `vanilla` or `flat`. |
-| `perlite-terrain-backend` | `auto` | `cpu`, `gpu` or `auto`. |
 | `perlite-plugin-dir`, `perlite-block-data-dir`, `perlite-flat-layers`, `perlite-ice-servers`, `perlite-ice-bind-address`, `perlite-auth-root-keys` | | Same as before the split; the old `perlin-*` spellings still load. |
 
 ### Ports and joining
@@ -70,4 +68,4 @@ Other files in the data folder: `allowlist.json`, `permissions.json`, `banned-pl
 
 ## The C API
 
-`include/perlite/perlite.h` creates a server, starts it on its own thread or ticks it from the host, runs console commands, and opens in-process loopback connections. Perlin's singleplayer uses it through `perlite_embed`. The `config_json` option overrides `server.properties` keys for an embedded server: `view_distance`, `max_players`, `gamemode`, `seed`, `generator`, `terrain_backend`, `block_data_dir`, `plugin_dir`, `max_threads`, `world_storage`, `level_name` and `autosave_seconds`.
+`include/perlite/perlite.h` creates a server, starts it on its own thread or ticks it from the host, runs console commands, and opens in-process loopback connections. Perlin's singleplayer uses it through `perlite_embed`. The `config_json` option overrides `server.properties` keys for an embedded server: `view_distance`, `max_players`, `gamemode`, `seed`, `generator`, `block_data_dir`, `plugin_dir`, `max_threads`, `world_storage`, `level_name` and `autosave_seconds`.

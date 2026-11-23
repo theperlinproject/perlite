@@ -2,7 +2,7 @@
 
 namespace perlite {
     void ActorManager::Physics(Mob& m) {
-        const uint16_t here = server.Chunks().GetBlock(static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y + 0.2)),
+        const uint16_t here = World().GetBlock(static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y + 0.2)),
                                                        static_cast<int>(std::floor(m.z)));
         m.inWater = BlockLiquid(here);
         const bool flying = (m.def->flags & mobflag::Fly) != 0;

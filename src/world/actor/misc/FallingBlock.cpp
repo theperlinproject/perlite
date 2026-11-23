@@ -57,7 +57,7 @@ namespace perlite {
         m.health = 1;
         m.persistent = true;
         Mob& added = Add(m);
-        for (Session* s : server.PlayersIn(kOverworld))
+        for (Session* s : server.PlayersIn(dimension))
             s->ShowMob(added);
         added.lastX = static_cast<float>(x);
         added.lastY = static_cast<float>(y);
@@ -68,9 +68,9 @@ namespace perlite {
 
     bool ActorManager::TickFallingBlock(Mob& m) {
         const auto blockAt = [&](int bx, int by, int bz) -> uint16_t {
-            if (by < kMinY || by >= kMinY + kHeight || !server.Chunks().Peek({bx >> 4, bz >> 4}))
+            if (by < kMinY || by >= kMinY + kHeight || !World().Peek({bx >> 4, bz >> 4}))
                 return BlockRegistry::kAir;
-            return server.Chunks().GetBlock(bx, by, bz);
+            return World().GetBlock(bx, by, bz);
         };
         const int bx = static_cast<int>(std::floor(m.x)), bz = static_cast<int>(std::floor(m.z));
         if (m.age > 600 || m.y < kMinY - 64)
@@ -83,7 +83,7 @@ namespace perlite {
             if (!FallingFree(blockAt(bx, c, bz))) {
                 const int place = c + 1;
                 if (FallingFree(blockAt(bx, place, bz)))
-                    server.SetBlockIn(kOverworld, bx, place, bz, m.block);
+                    server.SetBlockIn(dimension, bx, place, bz, m.block);
                 return true;
             }
             if (c == static_cast<int>(std::floor(ny)))

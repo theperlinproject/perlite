@@ -15,6 +15,7 @@
 namespace perlite {
 
     class Server;
+    class ChunkManager;
     class Session;
     struct ChunkPos;
 
@@ -24,11 +25,11 @@ namespace perlite {
     bool FallingFree(uint16_t id);
 
     namespace actorkind {
-        constexpr int Mob = 0, FallingBlock = 1, PrimedTnt = 2, ExperienceOrb = 3, Projectile = 4;
+        constexpr int Mob = 0, FallingBlock = 1, PrimedTnt = 2, ExperienceOrb = 3, Projectile = 4, Crystal = 5;
     }
 
     namespace projectile {
-        constexpr int Arrow = 0, Snowball = 1, Egg = 2, EnderPearl = 3, XpBottle = 4;
+        constexpr int Arrow = 0, Snowball = 1, Egg = 2, EnderPearl = 3, XpBottle = 4, DragonFireball = 5;
     }
 
     struct Mob {
@@ -81,11 +82,28 @@ namespace perlite {
         bool inGrid = false;      // listed in the entity grid, under gridCell
         bool kicked = false;      // pushed by an explosion this tick: the client gets the new motion
         int64_t gridCell = 0;
+        // The ender dragon: its phase (dragonphase::), ticks in it, the node it flies to, how many
+        // times it breathed on the podium, the damage taken while sitting and the crystal healing it.
+        int phase = 0, phaseTicks = 0, node = -1, flames = 0;
+        float sittingDamage = 0;
+        uint64_t healer = 0;
+        // An end crystal: whether it stands on its bedrock base, and the block its beam points at.
+        bool showBase = false, beam = false;
+        int beamX = 0, beamY = 0, beamZ = 0;
+        bool clockwise = false, sitting = false, dragon = false;
+        bool floats = false; // not pulled down on the client (the dragon, crystals)
     };
+
+    namespace dragonphase {
+        constexpr int Holding = 0, Strafe = 1, LandingApproach = 2, Landing = 3, Scanning = 4, Roaring = 5, Flaming = 6,
+                      Takeoff = 7, Charging = 8, Dying = 9, Hover = 10;
+    }
 
     class ActorManager {
     public:
-        explicit ActorManager(Server& server);
+        // The entities of one dimension.
+        ActorManager(Server& server, int dimension);
+        int Dimension() const { return dimension; }
 
         void Tick();
         Mob* Spawn(const std::string& identifier, double x, double y, double z, bool persistent = true);
@@ -96,6 +114,17 @@ namespace perlite {
         Mob* SpawnProjectile(int type, double x, double y, double z, double vx, double vy, double vz, uint64_t owner,
                              bool pickup = true);
         void Explosion(double x, double y, double z, float power, uint64_t source, bool breakBlocks = true);
+        // An explosion that goes off with the rest of this tick's (crystals set each other off).
+        void QueueExplosion(double x, double y, double z, float power, uint64_t source, bool breakBlocks = true);
+        Mob* SpawnCrystal(double x, double y, double z, bool showBase);
+        Mob* SpawnDragon(double x, double y, double z);
+        // Points a crystal's beam at a block, or turns it off.
+        void SetBeam(Mob& crystal, bool on, int x = 0, int y = 0, int z = 0);
+        // Blows a crystal up (hit by anything, or by an explosion).
+        void DestroyCrystal(Mob& crystal, Session* by);
+        static bool IsDragon(const Mob& m) { return m.dragon; }
+        // A lingering cloud of dragon's breath: harms the players in it.
+        void BreathCloud(double x, double y, double z, float radius, int duration, float growth, uint64_t owner);
         bool Kill(uint64_t id);
         // Puts a slime or magma cube in a size class (index into its type's sizes) and redraws it.
         void SetSize(Mob& m, int size);
@@ -137,6 +166,21 @@ namespace perlite {
         bool TickShot(Mob& m);
         void Land(Mob& m, double x, double y, double z, Session* shooter);
         void Shoot(Mob& m, Session& at);
+        void TickDragon(Mob& m);
+        void DragonFlyTo(Mob& m, double tx, double ty, double tz, double speed);
+        void DragonContact(Mob& m);
+        void DragonBreakBlocks(Mob& m);
+        void DragonHurt(Mob& m, float damage, double fromX, double fromZ, Session* by);
+        void DragonHoldingTarget(Mob& m);
+        void TickClouds();
+        struct Cloud {
+            double x = 0, y = 0, z = 0;
+            float radius = 3, growth = 0;
+            int ticks = 0, duration = 600;
+            uint64_t owner = 0;
+        };
+        std::vector<Cloud> clouds;
+        const MobDef* dragonDef = nullptr;
 
         // Adds a mob to the list and the id index; every new entity goes through here.
         Mob& Add(const Mob& m);
@@ -178,7 +222,9 @@ namespace perlite {
         mutable BrickTable bricks;
         template <class F> void ForNear(double x, double z, double radius, F&& f);
 
+        ChunkManager& World() const;
         Server& server;
+        int dimension = 0;
         std::list<Mob> mobs;
         std::unordered_map<uint64_t, Mob*> byId;
         std::unordered_map<int64_t, std::vector<Mob*>> grid;
@@ -188,7 +234,7 @@ namespace perlite {
         bool ticking = false;
         std::unordered_set<uint64_t> spawnedChunks;
         std::mt19937 rng{0xC0FFEE};
-        uint64_t nextId = 5'000'000;
+        uint64_t nextId = 5'000'000; // set per dimension in the constructor
         int spawnTick = 0;
     };
 }

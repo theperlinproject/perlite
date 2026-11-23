@@ -14,4 +14,13 @@ namespace perlite::vanillapack {
     // downloading it first when it is missing or from another version (and download is true).
     // Empty when there is no pack.
     std::string Ensure(const std::string& dataDir, bool download);
+
+    // The structure templates and loot tables of the vanilla pack are not in bedrock-samples: they
+    // come with the Bedrock Dedicated Server. When `download` is set and they are not there yet, the
+    // latest Bedrock Dedicated Server is fetched from minecraft.net (its use is under the Minecraft
+    // EULA, https://www.minecraft.net/eula) and only behavior_packs/vanilla/structures and
+    // loot_tables are kept, in <data folder>/bds_vanilla_pack. Returns that folder, or empty.
+    std::string EnsureStructures(const std::string& dataDir, bool download);
+    // Keeps behavior_packs/vanilla/structures and loot_tables of a server zip in `target`.
+    bool ExtractStructures(const std::string& zipBytes, const std::string& target, size_t& kept, std::string& error);
 }

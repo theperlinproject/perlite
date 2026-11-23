@@ -5,15 +5,21 @@ namespace perlite {
 
     bool BlockLiquid(uint16_t id) { return ShapeOf(id).liquid; }
 
-    ActorManager::ActorManager(Server& s) : server(s) {}
+    // Entity ids of each dimension come from their own range (all above player ids).
+    ActorManager::ActorManager(Server& s, int dim)
+        : server(s), dimension(dim), nextId(5'000'000 + static_cast<uint64_t>(dim) * 1'000'000'000'000ull) {}
+
+    ChunkManager& ActorManager::World() const {
+        return server.World(dimension);
+    }
 
     bool ActorManager::Solid(double x, double y, double z) const {
         const int bx = static_cast<int>(std::floor(x)), by = static_cast<int>(std::floor(y)), bz = static_cast<int>(std::floor(z));
         if (by < kMinY)
             return true;
-        if (!server.Chunks().Peek({bx >> 4, bz >> 4}))
+        if (!World().Peek({bx >> 4, bz >> 4}))
             return true;
-        return BlockSolid(server.Chunks().GetBlock(bx, by, bz));
+        return BlockSolid(World().GetBlock(bx, by, bz));
     }
 
     bool ActorManager::Collides(const Mob& m, double x, double y, double z) const {
@@ -29,7 +35,7 @@ namespace perlite {
     }
 
     int ActorManager::SurfaceY(int x, int z) const {
-        const ChunkColumn* column = server.Chunks().Column(x >> 4, z >> 4);
+        const ChunkColumn* column = World().Column(x >> 4, z >> 4);
         if (!column)
             return kMinY - 1;
         const int lx = x & 15, lz = z & 15;
@@ -70,7 +76,7 @@ namespace perlite {
     uint64_t ActorManager::Flags(const Mob& m) {
         namespace F = proto::FlagsMetadataFlags1;
         uint64_t f = F::HasCollision | F::Breathing | F::CanClimb | F::Walker;
-        if (!(m.def->flags & mobflag::Fly) && !m.projectile && !((m.def->flags & mobflag::Aquatic) && m.inWater))
+        if (!(m.def->flags & mobflag::Fly) && !m.projectile && !m.floats && !((m.def->flags & mobflag::Aquatic) && m.inWater))
             f |= F::AffectedByGravity;
         if (m.burning)
             f |= F::Onfire;
@@ -82,6 +88,10 @@ namespace perlite {
             f |= F::Ignited;
         if (m.kind == actorkind::Projectile && m.crit && !m.stuck)
             f |= F::Critical;
+        if (m.kind == actorkind::Crystal && m.showBase)
+            f |= F::Showbase;
+        if (m.sitting)
+            f |= F::Sitting;
         return f;
     }
 
@@ -115,6 +125,12 @@ namespace perlite {
         }
         m.maxHealth = m.health;
         m.persistent = persistent;
+        if (std::string_view(m.def->id) == "minecraft:ender_dragon") {
+            // The dragon flies its own way (see boss/EnderDragon.cpp) and never despawns.
+            m.dragon = true;
+            m.floats = true;
+            m.persistent = true;
+        }
         // What the mob holds, as vanilla equips it on spawn.
         {
             const std::string_view id = m.def->id;
@@ -145,7 +161,7 @@ namespace perlite {
         }
         m.yaw = m.headYaw = static_cast<float>(rng() % 360);
         Mob& added = Add(m);
-        for (Session* s : server.PlayersIn(kOverworld))
+        for (Session* s : server.PlayersIn(dimension))
             s->ShowMob(added);
         added.lastX = static_cast<float>(x);
         added.lastY = static_cast<float>(y);
@@ -204,7 +220,7 @@ namespace perlite {
         const auto it = std::ranges::find_if(mobs, [id](const Mob& m) { return m.id == id; });
         if (it == mobs.end())
             return false;
-        for (Session* s : server.PlayersIn(kOverworld))
+        for (Session* s : server.PlayersIn(dimension))
             s->HideItem(id);
         Erase(it);
         return true;
@@ -217,7 +233,7 @@ namespace perlite {
 
     void ActorManager::Moved(Mob& m) {
         Broadcast(m, true);
-        for (Session* s : server.PlayersIn(kOverworld))
+        for (Session* s : server.PlayersIn(dimension))
             s->MobMotion(m);
     }
 
@@ -247,7 +263,7 @@ namespace perlite {
     Session* ActorManager::Nearest(const Mob& m, double range, bool survivalOnly) {
         Session* best = nullptr;
         double bestD = range * range;
-        for (Session* s : server.PlayersIn(kOverworld)) {
+        for (Session* s : server.PlayersIn(dimension)) {
             if (survivalOnly && (s->GameMode() == 1 || s->Spectator() || s->Dead()))
                 continue;
             const double dx = s->X() - m.x, dy = (s->Y() - 1.62) - m.y, dz = s->Z() - m.z;
@@ -266,7 +282,7 @@ namespace perlite {
                            Angle(m.headYaw) != Angle(m.lastHead);
         std::vector<Session*> fresh;
         if (!ticking)
-            fresh = server.PlayersIn(kOverworld);
+            fresh = server.PlayersIn(dimension);
         const std::vector<Session*>& players = ticking ? tickPlayers : fresh;
         if (moved || force) {
             const Session::Encoded move = Session::EncodeMoveMob(m);
@@ -289,12 +305,12 @@ namespace perlite {
     void ActorManager::Tick() {
         effectsThisTick = 0;
         fuseSoundsThisTick = 0;
-        tickPlayers = server.PlayersIn(kOverworld);
+        tickPlayers = server.PlayersIn(dimension);
         ticking = true;
         RebuildGrid();
         if (++spawnTick % 20 == 0)
             NaturalSpawns();
-        const std::vector<Session*> players = server.PlayersIn(kOverworld);
+        const std::vector<Session*> players = server.PlayersIn(dimension);
         for (auto it = mobs.begin(); it != mobs.end();) {
             Mob& m = *it;
             m.age++;
@@ -303,7 +319,7 @@ namespace perlite {
                 remove = ++m.deathTime > 20;
             } else if (m.projectile && m.age > 1200 && m.kind == actorkind::Mob) {
                 remove = true;
-            } else if (server.Chunks().Peek({static_cast<int>(std::floor(m.x)) >> 4, static_cast<int>(std::floor(m.z)) >> 4})) {
+            } else if (World().Peek({static_cast<int>(std::floor(m.x)) >> 4, static_cast<int>(std::floor(m.z)) >> 4})) {
                 if (!m.persistent && !m.projectile) {
                     double nearest = 1e18;
                     for (Session* s : players) {
@@ -335,8 +351,13 @@ namespace perlite {
                         m.invulnerable--;
                     if (m.lastAttackerTicks > 0)
                         m.lastAttackerTicks--;
-                    Think(m);
-                    if (m.deathTime == 0) {
+                    if (IsDragon(m)) {
+                        TickDragon(m);
+                        if (m.deathTime == 0)
+                            Broadcast(m, false);
+                    } else
+                        Think(m);
+                    if (m.deathTime == 0 && !IsDragon(m)) {
                         if (m.health <= 0)
                             Die(m, nullptr);
                         else {
@@ -354,6 +375,7 @@ namespace perlite {
                 ++it;
             }
         }
+        TickClouds();
         RunBlasts();
         ticking = false;
         tickPlayers.clear();
@@ -369,6 +391,13 @@ namespace perlite {
             return TickExperienceOrb(m);
         case actorkind::Projectile:
             return TickShot(m);
+        case actorkind::Crystal:
+            if (m.showBase && dimension == kEnd && m.age % 20 == 0) {
+                const int bx = static_cast<int>(std::floor(m.x)), by = static_cast<int>(std::floor(m.y)), bz = static_cast<int>(std::floor(m.z));
+                if (World().GetBlock(bx, by, bz) == BlockRegistry::kAir)
+                    server.SetBlockIn(dimension, bx, by, bz, BlockCatalog::Instance().DefaultBlock("minecraft:fire"));
+            }
+            return false;
         default:
             return true;
         }

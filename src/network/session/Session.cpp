@@ -166,6 +166,12 @@ namespace perlite {
         case proto::CommandRequestPacket::kId:
             OnCommand(body);
             break;
+        case proto::ScriptMessagePacket::kId: {
+            proto::ScriptMessagePacket m;
+            if (Decode(body, m) && state == State::InGame && m.messageId.starts_with("perlin:") && m.messageId.size() <= 7 + 64 && m.data.size() <= 65536)
+                server.HookModChannel(*this, m.messageId.substr(7), m.data);
+            break;
+        }
         case proto::PlayerAuthInputPacket::kId:
             OnAuthInput(body);
             break;

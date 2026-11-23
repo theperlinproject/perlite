@@ -31,6 +31,7 @@
 #include <vector>
 
 namespace perlite {
+    class DragonFight;
 
     struct CatalogItem;
 
@@ -168,6 +169,13 @@ namespace perlite {
                        int pickupDelay, int dimension = kOverworld);
         const std::vector<ItemEntity>& Items() const { return itemEntities; }
         ActorManager& Mobs() { return *mobWorld; }
+        // The entities of a dimension.
+        DragonFight& Fight() { return *fight; }
+        ActorManager& MobsIn(int dimension) {
+            return *mobWorlds[static_cast<size_t>(std::clamp(dimension, 0, kDimensionCount - 1))];
+        }
+        // The dimension's entity list holding this id, or null.
+        ActorManager* ManagerOf(uint64_t entity);
         struct BlockContainer {
             int kind = 0;
             int x = 0, y = 0, z = 0;
@@ -253,6 +261,22 @@ namespace perlite {
         abi::host::Result<void> OpMotdSet(PluginCall&, const abi::MotdSetRequest&) override;
         abi::host::Result<void> OpLootTableOverride(PluginCall&, const abi::LootTableOverrideRequest&) override;
         abi::host::Result<abi::RestText> OpLootTableGet(PluginCall&, const abi::LootTableGetRequest&) override;
+#if PERLITE_PERLIN_REV3
+        abi::host::Result<void> OpContentEntityRegister(PluginCall&, const abi::ContentEntity&) override;
+        abi::host::Result<void> OpContentItemRegister(PluginCall&, const abi::ContentItem&) override;
+        abi::host::Result<void> OpContentBlockRegister(PluginCall&, const abi::ContentBlock&) override;
+        abi::host::Result<void> OpContentBiomeRegister(PluginCall&, const abi::ContentBiome&) override;
+        abi::host::Result<void> OpContentUnregister(PluginCall&, const abi::ContentUnregisterRequest&) override;
+        abi::host::Result<abi::ContentListResponse> OpContentList(PluginCall&) override;
+        abi::host::Result<void> OpModChannelSend(PluginCall&, const abi::ModChannelMessage&) override;
+#endif
+        // A client mod's message on a mod channel; the content list goes to a client mod saying hello.
+        void HookModChannel(Session& from, const std::string& channel, const std::string& body);
+        // Content mods' biomes and spawns on a new chunk, then the ChunkGenerated event.
+        void ContentOnNewChunk(int dimension, ChunkPos pos, ChunkColumn& column);
+        void TickContentSpawns();
+        void EnsureContent();
+        void AnnounceContent();
 
         bool HookPreLogin(Session& who, std::string& reason);
         bool HookPlayerDamage(Session& who, float& amount, Session::DamageCause cause, Session* attacker,
@@ -339,11 +363,16 @@ namespace perlite {
         std::map<std::string, CommandDef> commands;
         std::vector<uint8_t> itemRegistryBody, creativeBody;
         std::vector<ItemEntity> itemEntities;
-        std::unique_ptr<ActorManager> mobWorld;
+        std::array<std::unique_ptr<ActorManager>, kDimensionCount> mobWorlds;
+        std::unique_ptr<DragonFight> fight;
+        struct ContentState;
+        std::shared_ptr<ContentState> content; // shared: destroyed where the type is known
+        ActorManager* mobWorld = nullptr; // the overworld's
         std::unordered_map<int64_t, BlockContainer> containers;
         void TickContainers();
         void SaveContainers();
         void LoadContainers(int dimension, ChunkPos pos);
+        void ConsumeGenerated(int dimension, ChunkPos pos);
         std::set<std::tuple<int, int, int>> blockEntityChunks;
         void DropContainer(int dimension, int x, int y, int z);
         bool UseItemOn(Session& by, int dimension, int x, int y, int z, int face, const CatalogItem& item);

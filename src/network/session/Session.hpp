@@ -110,6 +110,12 @@ namespace perlite {
         void MobData(const Mob& mob);
         void MobMotion(const Mob& mob);
         void MobEvent(uint64_t id, int event, int data);
+        // The boss bar of an entity: type 0 show, 2 hide, 4 health (progress 0..1).
+        void BossBar(uint64_t entity, int type, const std::string& title, float progress);
+        void ShowCredits();
+        // A message to this player's client mods on a mod channel (rides on a script message).
+        void SendModChannel(const std::string& channel, const std::string& body);
+        bool contentClient = false; // a client mod for content said hello
         void CritAnimation(uint64_t id);
         enum class DamageCause : uint8_t {
             Generic,

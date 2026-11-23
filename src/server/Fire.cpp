@@ -183,7 +183,7 @@ namespace perlite {
                     continue;
                 if (BlockRegistry::Instance().Name(near) == "minecraft:tnt") {
                     ApplyBlock(f.dimension, bx, by, bz, BlockRegistry::kAir);
-                    Mobs().SpawnPrimedTnt(bx + 0.5, by, bz + 0.5, 80);
+                    MobsIn(f.dimension).SpawnPrimedTnt(bx + 0.5, by, bz + 0.5, 80);
                     continue;
                 }
                 ApplyBlock(f.dimension, bx, by, bz, BlockRegistry::kAir);

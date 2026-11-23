@@ -42,6 +42,10 @@ namespace perlite {
         const MobType& Add(const MobDef& def, MobCategory category,
                            std::unique_ptr<MobBehavior> behavior = nullptr);
         void Alias(std::string_view alias, std::string_view identifier);
+        // A content mod's entity built on a vanilla one (its behaviour, category and sizes), with
+        // overrides. Null when the base is unknown.
+        const MobType* AddContent(const std::string& id, const std::string& base, const std::string& wireId, float health,
+                                  float width, float height, float speed, float attack);
         const MobType* Find(std::string_view identifier) const;
         const MobType* TypeOf(const MobDef* def) const;
         const MobBehavior& BehaviorOf(const MobDef* def) const;

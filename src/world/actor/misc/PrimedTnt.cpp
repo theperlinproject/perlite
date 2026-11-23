@@ -21,7 +21,7 @@ namespace perlite {
         Mob& added = Add(m);
         const bool sound = fuseSoundsThisTick++ < 16;
         const Session::Encoded motion = Session::EncodeMobMotion(added, server.TickCount());
-        for (Session* s : server.PlayersIn(kOverworld)) {
+        for (Session* s : server.PlayersIn(dimension)) {
             s->ShowMob(added);
             s->SendEncoded(motion);
             if (sound)
@@ -36,9 +36,9 @@ namespace perlite {
 
     bool ActorManager::TickPrimedTnt(Mob& m) {
         const auto blockAt = [&](int bx, int by, int bz) -> uint16_t {
-            if (by < kMinY || by >= kMinY + kHeight || !server.Chunks().Peek({bx >> 4, bz >> 4}))
+            if (by < kMinY || by >= kMinY + kHeight || !World().Peek({bx >> 4, bz >> 4}))
                 return BlockRegistry::kAir;
-            return server.Chunks().GetBlock(bx, by, bz);
+            return World().GetBlock(bx, by, bz);
         };
         m.vy -= 0.04;
         const auto solid = [&](double px, double py, double pz) {

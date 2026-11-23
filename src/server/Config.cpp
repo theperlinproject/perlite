@@ -295,11 +295,17 @@ namespace perlite {
             {"perlite-download-vanilla-pack", "true",
              "Download Mojang's vanilla behavior pack (mob sizes, block shapes) from bedrock-samples on GitHub."},
             {"perlite-generator", "vanilla", "Terrain for new chunks: vanilla or flat."},
-            {"perlite-terrain-backend", "auto", "Where terrain is generated: cpu, gpu or auto."},
             {"perlite-flat-layers", "minecraft:bedrock*1,minecraft:dirt*2,minecraft:grass_block*1",
              "Layers of a flat world, bottom up: block*count separated by commas."},
             {"perlite-plugin-dir", "", "Folder with plugins. Empty uses plugins/ in the data folder."},
             {"perlite-block-data-dir", "", "Folder with block data. Empty uses the data folder beside the program."},
+            {"perlite-download-structures", "true",
+             "When no structure pack is found, download the latest Bedrock Dedicated Server from minecraft.net and keep "
+             "only its structure templates and loot tables (the Minecraft EULA applies: https://www.minecraft.net/eula)."},
+            {"perlite-structure-pack", "",
+             "A Bedrock vanilla behavior pack (from your own Bedrock Dedicated Server or game install) whose structures "
+             "folder holds the village, outpost, bastion and other templates. Empty looks for behavior_packs/vanilla "
+             "beside the server, then for the downloaded copy. Without it only structures built in code generate."},
             {"perlite-ice-servers", "", "STUN/TURN servers for NetherNet, comma separated. Usually left empty."},
             {"perlite-ice-bind-address", "", "Address NetherNet gameplay traffic is bound to. Empty uses all."},
             {"perlite-auth-root-keys", "", "Extra trusted Xbox Live root keys, comma separated. Usually left empty."},
@@ -562,16 +568,22 @@ namespace perlite {
             generator = lower;
             return true;
         }
-        if (key == "perlite-terrain-backend") {
-            terrainBackend = lower;
-            return true;
-        }
+        if (key == "perlite-terrain-backend")
+            return true; // gone (terrain is always generated on the cpu); old files keep working
         if (key == "perlite-plugin-dir") {
             pluginDir = v;
             return true;
         }
         if (key == "perlite-block-data-dir") {
             blockDataDir = v;
+            return true;
+        }
+        if (key == "perlite-download-structures") {
+            downloadStructures = lower == "true";
+            return true;
+        }
+        if (key == "perlite-structure-pack") {
+            structurePack = v;
             return true;
         }
         if (key == "perlite-ice-servers") {
@@ -669,6 +681,7 @@ namespace perlite {
         c.randomSeed = true;
         c.udpPortsSet = true;
         c.udpPortBegin = c.udpPortEnd = c.port;
+        c.downloadStructures = true;
         return c;
     }
 
@@ -745,14 +758,16 @@ namespace perlite {
                 value = Bool(downloadVanillaPack);
             else if (key == "perlite-generator")
                 value = generator;
-            else if (key == "perlite-terrain-backend")
-                value = terrainBackend;
             else if (key == "perlite-flat-layers")
                 value = FlatLayersText(flatLayers);
             else if (key == "perlite-plugin-dir")
                 value = pluginDir;
             else if (key == "perlite-block-data-dir")
                 value = blockDataDir;
+            else if (key == "perlite-download-structures")
+                value = Bool(downloadStructures);
+            else if (key == "perlite-structure-pack")
+                value = structurePack;
             else if (key == "perlite-ice-servers")
                 value = JoinList(iceServers);
             else if (key == "perlite-ice-bind-address")

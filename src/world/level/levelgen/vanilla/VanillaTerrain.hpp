@@ -7,6 +7,7 @@
 #include "world/level/levelgen/vanilla/JavaDecorator.hpp"
 #include "world/level/levelgen/vanilla/VanillaFeatures.hpp"
 #include "world/level/levelgen/vanilla/VanillaSurface.hpp"
+#include "world/level/structure/Structures.hpp"
 
 namespace perlite::vanilla {
 
@@ -25,8 +26,13 @@ namespace perlite::vanilla {
         bool HasBiomes() const override { return true; }
         bool Decorates() const override { return decorator && decorator->Ok(); }
         void Decorate(ChunkPos pos, const ChunkColumn* const region[], ChunkColumn& out) const override {
+            // Structures go in before the features, as the game's surface structures step comes
+            // before its vegetation.
+            if (structures)
+                structures->Place(pos.x, pos.z, out);
             decorator->Decorate(pos.x, pos.z, region, out);
         }
+        structure::StructureGenerator* Structures() const { return structures.get(); }
         const JavaDecorator* Decorator() const { return decorator.get(); }
         const json::Value* Spawns(int tableIndex) const override {
             const JavaBiome* b = decorator ? decorator->Biome(tableIndex) : nullptr;
@@ -68,6 +74,7 @@ namespace perlite::vanilla {
         std::unique_ptr<VanillaMaterials> materials;
         std::unique_ptr<VanillaCarvers> carvers;
         TerrainStages stages;
+        std::shared_ptr<structure::StructureGenerator> structures;
 
     public:
         const TerrainStages* Stages() const { return &stages; }

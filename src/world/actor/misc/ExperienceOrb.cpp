@@ -32,7 +32,7 @@ namespace perlite {
             m.persistent = true;
             Add(m);
             Mob& added = mobs.back();
-            for (Session* s : server.PlayersIn(kOverworld)) {
+            for (Session* s : server.PlayersIn(dimension)) {
                 s->ShowMob(added);
                 s->MobMotion(added);
             }
@@ -45,15 +45,15 @@ namespace perlite {
 
     bool ActorManager::TickExperienceOrb(Mob& m) {
         const auto blockAt = [&](int bx, int by, int bz) -> uint16_t {
-            if (by < kMinY || by >= kMinY + kHeight || !server.Chunks().Peek({bx >> 4, bz >> 4}))
+            if (by < kMinY || by >= kMinY + kHeight || !World().Peek({bx >> 4, bz >> 4}))
                 return BlockRegistry::kAir;
-            return server.Chunks().GetBlock(bx, by, bz);
+            return World().GetBlock(bx, by, bz);
         };
         if (m.age > 6000 || m.y < kMinY - 64)
             return true;
         Session* best = nullptr;
         double bestD = 8.0 * 8.0;
-        for (Session* s : server.PlayersIn(kOverworld)) {
+        for (Session* s : server.PlayersIn(dimension)) {
             if (s->Spectator() || s->Dead())
                 continue;
             const double dx = s->X() - m.x, dy = (s->Y() - 1.0) - m.y, dz = s->Z() - m.z;
@@ -68,7 +68,7 @@ namespace perlite {
             const double d = std::sqrt(dx * dx + dy * dy + dz * dz);
             if (d < 1.25) {
                 best->AddExperience(m.block);
-                for (Session* s : server.PlayersIn(kOverworld))
+                for (Session* s : server.PlayersIn(dimension))
                     s->TakeItem(m.id, best->Id());
                 return true;
             }

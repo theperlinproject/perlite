@@ -409,6 +409,24 @@ namespace perlite {
                 plugin->info.version = manifest["version"].String();
                 plugin->info.author = manifest["author"].String();
                 plugin->info.description = manifest["description"].String();
+                // Which programs the mod is for: a mod made only for the game is not run here.
+                const json::Value& target = manifest["target"];
+                if (!target.items.empty() || target.IsString()) {
+                    bool server = false;
+                    std::string named;
+                    const auto check = [&](const std::string& t) {
+                        named += (named.empty() ? "" : ", ") + t;
+                        server = server || t == "server";
+                    };
+                    if (target.IsString())
+                        check(target.String());
+                    for (const json::Value& t : target.items)
+                        check(t.String());
+                    if (!server) {
+                        error = "made for " + named + ", not for servers (its manifest's target)";
+                        return false;
+                    }
+                }
             }
         }
         plugin->dataDir = (fs::path(path).parent_path() / "data" / plugin->info.name).string();

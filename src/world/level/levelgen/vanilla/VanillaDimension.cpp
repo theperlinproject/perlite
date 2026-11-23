@@ -1,4 +1,6 @@
 #include "world/level/levelgen/vanilla/VanillaDimension.hpp"
+#include "world/level/end/EndGen.hpp"
+#include "world/level/levelgen/vanilla/NetherGen.hpp"
 
 #include "world/level/block/BlockCatalog.hpp"
 #include "world/level/levelgen/vanilla/BiomeData.hpp"
@@ -89,12 +91,48 @@ namespace perlite::vanilla {
                            {0, -5000, 0, BiomeIndexOf("soul_sand_valley")},
                            {-5000, 0, 1750, BiomeIndexOf("basalt_deltas")},
                            {0, 5000, 3750, BiomeIndexOf("warped_forest")}};
+        b->worldSeed = seed;
         b->endCenter = BiomeIndexOf("the_end");
         b->endHighlands = BiomeIndexOf("end_highlands");
         b->endMidlands = BiomeIndexOf("end_midlands");
         b->endIslands = BiomeIndexOf("small_end_islands");
         b->endBarrens = BiomeIndexOf("end_barrens");
+        {
+                auto store = structure::TemplateStore::Find(config.structurePack, config.dataDir);
+                structure::WorldProbe probe;
+                probe.seed = static_cast<int64_t>(config.seed);
+                probe.dimension = dimension;
+                probe.minY = 0;
+                probe.maxY = dimension == kNether ? 127 : 255;
+                const VanillaDimensionBackend* me = b.get();
+                probe.surface = [me, dimension](int x, int z) {
+                    if (dimension == kNether)
+                        return 64;
+                    return me->SurfaceY(x, z);
+                };
+                const VanillaDimensionBackend* self = b.get();
+                probe.biome = [self](int x, int y, int z) { return self->BiomeAt(x, y, z); };
+                b->structures = std::make_shared<structure::StructureGenerator>(store, probe);
+            }
         return b;
+    }
+
+    void VanillaDimensionBackend::Decorate(ChunkPos pos, const ChunkColumn* const region[], ChunkColumn& out) const {
+        if (dimension == kEnd) {
+            theend::Biomes biomes;
+            biomes.theEnd = endCenter;
+            biomes.highlands = endHighlands;
+            biomes.smallIslands = endIslands;
+            theend::Decorate(worldSeed, pos.x, pos.z, region, out, biomes);
+        } else if (dimension == kNether) {
+            if (structures)
+                structures->Place(pos.x, pos.z, out);
+        }
+        if (dimension == kEnd && structures)
+            structures->Place(pos.x, pos.z, out);
+        if (dimension == kNether) {
+            DecorateNether(worldSeed, pos.x, pos.z, region, out);
+        }
     }
 
     int VanillaDimensionBackend::SearchNether(const int32_t target[2], int& hint) const {

@@ -1,4 +1,6 @@
 #pragma once
+#include <string>
+#include <vector>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -44,8 +46,18 @@ namespace perlite {
         return (x << 8) | (z << 4) | (y & 15);
     }
 
+    // What structure generation leaves for the server once a new chunk is ready: a chest to fill
+    // from a loot table, or a mob to spawn (villagers, golems, piglins).
+    struct GeneratedExtra {
+        enum Kind : uint8_t { Loot, Entity } kind = Loot;
+        int x = 0, y = 0, z = 0;
+        std::string text;
+    };
+
     class ChunkColumn {
     public:
+        std::vector<GeneratedExtra> generated;
+        bool generatedNow = false; // made by the generator, not loaded; cleared once the server has seen it
         struct Section {
             uint16_t uniform = 0;
             std::unique_ptr<std::array<uint16_t, kCells>> cells;

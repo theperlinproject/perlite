@@ -2,9 +2,12 @@
 // pack (which is downloaded at runtime, never shipped). The checks against the real pack run only
 // when PERLITE_VANILLA_PACK points at a downloaded copy.
 #include "test_util.hpp"
+#include <filesystem>
 
 #include "common/FileIo.hpp"
 #include "server/Config.hpp"
+#include "server/VanillaPack.hpp"
+#include <miniz.h>
 #include "world/actor/mob/VanillaEntities.hpp"
 #include "world/level/block/VoxelShapes.hpp"
 #include "world/level/block/BlockCatalog.hpp"
@@ -341,6 +344,29 @@ int main(int argc, char** argv) {
     } else {
         std::printf("server_data_test: PERLITE_VANILLA_PACK not set, skipping the checks against the real pack\n");
     }
+    // Only the structure templates and loot tables of a server download are kept.
+    {
+        mz_zip_archive zip{};
+        CHECK(mz_zip_writer_init_heap(&zip, 0, 0));
+        const std::string body = "x";
+        for (const char* name : {"bedrock_server", "behavior_packs/vanilla/structures/village/plains/a.nbt",
+                                 "behavior_packs/vanilla/loot_tables/chests/b.json", "behavior_packs/vanilla/entities.brarchive"})
+            mz_zip_writer_add_mem(&zip, name, body.data(), body.size(), MZ_DEFAULT_COMPRESSION);
+        void* data = nullptr;
+        size_t size = 0;
+        CHECK(mz_zip_writer_finalize_heap_archive(&zip, &data, &size));
+        const std::string bytes(static_cast<const char*>(data), size);
+        mz_zip_writer_end(&zip);
+        const std::string target = (std::filesystem::temp_directory_path() / "perlite_bds_extract").string();
+        size_t kept = 0;
+        std::string err;
+        CHECK(perlite::vanillapack::ExtractStructures(bytes, target, kept, err));
+        CHECK(kept == 2);
+        CHECK(std::filesystem::exists(target + "/structures/village/plains/a.nbt"));
+        CHECK(!std::filesystem::exists(target + "/bedrock_server"));
+        std::filesystem::remove_all(target);
+    }
+
     if (g_failed) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failed);
         return 1;

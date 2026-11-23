@@ -378,6 +378,20 @@ static void TestPluginHost(const char* wasm) {
     CHECK(host.AnyoneListens(abi::Event::PlayerChat));
     host.UnloadAll();
     fs::remove_all(dir);
+
+    // The manifest's target: a mod made only for the game is refused; one for both runs.
+    fs::create_directories(dir);
+    fs::copy_file(wasm, dir / "client_only.wasm");
+    std::ofstream(dir / "client_only.json") << R"({"name": "client_only", "target": ["client"]})";
+    fs::copy_file(wasm, dir / "both.wasm");
+    std::ofstream(dir / "both.json") << R"({"name": "both", "target": ["client", "server"]})";
+    MockApi api2;
+    PluginHost host2(api2);
+    std::string error;
+    CHECK(!host2.LoadFile((dir / "client_only.wasm").string(), error) && error.contains("not for servers"));
+    CHECK(host2.LoadFile((dir / "both.wasm").string(), error));
+    host2.UnloadAll();
+    fs::remove_all(dir);
 }
 
 static void TestBlockCatalog() {
@@ -413,6 +427,12 @@ static void TestBlockCatalog() {
     const CatalogItem* log = c.ItemByName("minecraft:oak_log");
     CHECK(log && c.RegistryId(log->blockHash) != 0);
     CHECK(c.RegistryId(12345) == 0);
+    // Content mods' names stand for their base block or item.
+    c.Alias("mymod:jade_block", "minecraft:emerald_block");
+    CHECK(c.Knows("mymod:jade_block") && c.DefaultBlock("mymod:jade_block") == c.DefaultBlock("minecraft:emerald_block"));
+    CHECK(c.ItemByName("mymod:jade_block") == c.ItemByName("minecraft:emerald_block"));
+    c.Unalias("mymod:jade_block");
+    CHECK(!c.Knows("mymod:jade_block"));
 }
 
 static perlite::proto2225::ItemStackRequestActionsEntry

@@ -87,7 +87,7 @@ namespace perlite {
                         damage *= 1.5f;
                     target->Damage(damage, Session::DamageCause::Mob, m.x, m.z, d.id);
                     m.attackCooldown = 20;
-                    for (Session* s : server.PlayersIn(kOverworld))
+                    for (Session* s : server.PlayersIn(dimension))
                         s->MobEvent(m.id, 4, 0);
                 }
             }
@@ -180,8 +180,8 @@ namespace perlite {
                     if (!Solid(ax + 0.5, by - 0.5, az + 0.5) && !Solid(ax + 0.5, by - 1.5, az + 0.5) &&
                         !Solid(ax + 0.5, by - 2.5, az + 0.5))
                         m.hasGoal = false, m.vx = 0, m.vz = 0;
-                    const uint16_t ahead = server.Chunks().GetBlock(ax, by, az);
-                    const uint16_t below = server.Chunks().GetBlock(ax, by - 1, az);
+                    const uint16_t ahead = World().GetBlock(ax, by, az);
+                    const uint16_t below = World().GetBlock(ax, by - 1, az);
                     if (BlockRegistry::Instance().Name(ahead).contains("lava") ||
                         BlockRegistry::Instance().Name(below).contains("lava"))
                         m.hasGoal = false, m.vx = 0, m.vz = 0;

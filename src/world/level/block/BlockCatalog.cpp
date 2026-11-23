@@ -47,7 +47,15 @@ namespace perlite {
         const auto it = byHash.find(hash);
         return it == byHash.end() ? nullptr : &items[it->second];
     }
-    const CatalogItem* BlockCatalog::ItemByName(const std::string& name) const {
+    void BlockCatalog::Alias(const std::string& name, const std::string& target) { aliases[name] = target; }
+    void BlockCatalog::Unalias(const std::string& name) { aliases.erase(name); }
+    std::string BlockCatalog::Unaliased(const std::string& name) const {
+        const auto it = aliases.find(name);
+        return it == aliases.end() ? name : it->second;
+    }
+
+    const CatalogItem* BlockCatalog::ItemByName(const std::string& nameIn) const {
+        const std::string& name = aliases.empty() ? nameIn : Unaliased(nameIn);
         const auto it = byName.find(name);
         return it == byName.end() ? nullptr : &items[it->second];
     }
@@ -60,7 +68,7 @@ namespace perlite {
     }
 
     uint16_t BlockCatalog::DefaultBlock(const std::string& name) const {
-        const std::string full = !name.contains(':') ? "minecraft:" + name : name;
+        const std::string full = Unaliased(!name.contains(':') ? "minecraft:" + name : name);
         if (const auto it = defaultByName.find(full); it != defaultByName.end())
             return RegistryId(it->second);
         return BlockRegistry::Instance().Intern(full);

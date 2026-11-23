@@ -23,7 +23,7 @@ namespace perlite {
             say(c.source, "TPS: " + Fixed(tps) + " | players: " + std::to_string(InGamePlayers().size()) +
                               "/" + std::to_string(config.maxPlayers) +
                               " | chunks: " + std::to_string(chunksLoaded) +
-                              " | mobs: " + std::to_string(Mobs().All().size()) +
+                              " | mobs: " + std::to_string(MobsIn(0).Count() + MobsIn(1).Count() + MobsIn(2).Count()) +
                               " | uptime: " + std::to_string(TickCount() / 20) + "s");
         });
 

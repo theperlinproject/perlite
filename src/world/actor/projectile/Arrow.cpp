@@ -12,6 +12,7 @@ namespace perlite {
             static const MobDef egg{"minecraft:egg", 0.25f, 0.25f, 1, 0, 0, 0, "", "", ""};
             static const MobDef pearl{"minecraft:ender_pearl", 0.25f, 0.25f, 1, 0, 0, 0, "", "", ""};
             static const MobDef bottle{"minecraft:xp_bottle", 0.25f, 0.25f, 1, 0, 0, 0, "", "", ""};
+            static const MobDef fireball{"minecraft:dragon_fireball", 1.0f, 1.0f, 1, 0, 0, 0, "", "", ""};
             switch (type) {
             case projectile::Arrow:
                 return &arrow;
@@ -21,6 +22,8 @@ namespace perlite {
                 return &egg;
             case projectile::EnderPearl:
                 return &pearl;
+            case projectile::DragonFireball:
+                return &fireball;
             default:
                 return &bottle;
             }
@@ -73,7 +76,7 @@ namespace perlite {
         m.yaw = m.headYaw = static_cast<float>(std::atan2(-vx, vz) * 180.0 / kPi);
         m.pitch = static_cast<float>(-std::atan2(vy, flat) * 180.0 / kPi);
         Mob& added = Add(m);
-        for (Session* s : server.PlayersIn(kOverworld)) {
+        for (Session* s : server.PlayersIn(dimension)) {
             s->ShowMob(added);
             s->MobMotion(added);
         }
@@ -101,7 +104,7 @@ namespace perlite {
         Mob* arrow = SpawnProjectile(projectile::Arrow, sx, sy, sz, vx / vlen * speed, vy / vlen * speed, vz / vlen * speed, m.id,
                                      false);
         if (arrow)
-            for (Session* s : server.PlayersIn(kOverworld))
+            for (Session* s : server.PlayersIn(dimension))
                 s->PlaySound("Bow", sx, sy, sz);
     }
 
@@ -110,13 +113,13 @@ namespace perlite {
     }
 
     bool ActorManager::TickShot(Mob& m) {
-        ChunkManager& world = server.Chunks();
+        ChunkManager& world = World();
         const auto blockAt = [&](int bx, int by, int bz) -> uint16_t {
             if (by < kMinY || by >= kMinY + kHeight || !world.Peek({bx >> 4, bz >> 4}))
                 return BlockRegistry::kAir;
             return world.GetBlock(bx, by, bz);
         };
-        const std::vector<Session*> players = server.PlayersIn(kOverworld);
+        const std::vector<Session*> players = server.PlayersIn(dimension);
 
         // An arrow in a block waits to be picked up, and falls again if the block goes.
         if (m.stuck) {
@@ -219,7 +222,9 @@ namespace perlite {
             }
         }
         for (Mob& o : mobs) {
-            if (&o == &m || o.kind != actorkind::Mob || o.projectile || o.deathTime || (o.id == m.owner && m.age < 5))
+            if (&o == &m || (o.kind != actorkind::Mob && o.kind != actorkind::Crystal) || o.projectile || o.deathTime ||
+                (o.id == m.owner && (m.age < 5 || m.shot == projectile::DragonFireball)) ||
+                (m.shot == projectile::DragonFireball && o.kind == actorkind::Crystal))
                 continue;
             if (std::abs(o.x - x0) > length + 4 || std::abs(o.z - z0) > length + 4)
                 continue;
@@ -263,6 +268,16 @@ namespace perlite {
                     }
                     if (m.flame)
                         hitPlayer->SetOnFire(5);
+                } else if (IsDragon(*hitMob) && hitMob->sitting) {
+                    // Arrows glance off the dragon on its perch (and catch fire).
+                    m.x = hx - dx * 0.05;
+                    m.y = hy - dy * 0.05;
+                    m.z = hz - dz * 0.05;
+                    m.vx *= -0.1;
+                    m.vy *= -0.1;
+                    m.vz *= -0.1;
+                    m.kicked = true;
+                    return false;
                 } else {
                     Hurt(*hitMob, damage, hx - dx / horiz, hz - dz / horiz, shooter, 0.4f + 0.5f * static_cast<float>(m.punch));
                     if (m.flame) {
@@ -275,8 +290,12 @@ namespace perlite {
                 return true;
             }
             // Thrown things knock back, and snowballs hurt blazes.
-            const double push = 0.4;
-            if (hitPlayer) {
+            const double push = m.shot == projectile::DragonFireball ? 0.0 : 0.4;
+            if (!hitPlayer && hitMob->kind == actorkind::Crystal) {
+                DestroyCrystal(*hitMob, shooter);
+            } else if (!hitPlayer && IsDragon(*hitMob)) {
+                // Thrown things bounce off the dragon.
+            } else if (hitPlayer) {
                 if (hitPlayer->GameMode() != 1)
                     hitPlayer->SetVelocity(dx / horiz * push, 0.3, dz / horiz * push);
             } else {
@@ -326,9 +345,10 @@ namespace perlite {
         const bool water = BlockLiquid(blockAt(static_cast<int>(std::floor(m.x)), static_cast<int>(std::floor(m.y)),
                                                static_cast<int>(std::floor(m.z))));
         // inertia / liquid_inertia and gravity of the vanilla projectile definitions.
-        const double drag = m.shot == projectile::EnderPearl ? 1.0 : water ? 0.6 : 0.99;
+        const double drag = m.shot == projectile::EnderPearl || m.shot == projectile::DragonFireball ? 1.0 : water ? 0.6 : 0.99;
         const double gravity = m.shot == projectile::Arrow || m.shot == projectile::XpBottle ? 0.05
                                : m.shot == projectile::EnderPearl                          ? 0.025
+                               : m.shot == projectile::DragonFireball                      ? 0.0
                                                                                            : 0.03;
         m.vx *= drag;
         m.vy *= drag;
@@ -344,7 +364,7 @@ namespace perlite {
 
     // A thrown projectile breaks where it lands.
     void ActorManager::Land(Mob& m, double x, double y, double z, Session* shooter) {
-        const std::vector<Session*> players = server.PlayersIn(kOverworld);
+        const std::vector<Session*> players = server.PlayersIn(dimension);
         // particle_on_hit: a snowball puffs, an egg cracks.
         if (m.shot == projectile::Snowball || m.shot == projectile::Egg) {
             const CatalogItem* egg = m.shot == projectile::Egg ? BlockCatalog::Instance().ItemByName("minecraft:egg") : nullptr;
@@ -362,7 +382,7 @@ namespace perlite {
             }
             break;
         case projectile::EnderPearl:
-            if (shooter && !shooter->Dead() && shooter->DimensionId() == kOverworld) {
+            if (shooter && !shooter->Dead() && shooter->DimensionId() == dimension) {
                 shooter->Teleport(x, y + 1.62, z);
                 if (!shooter->Creative())
                     shooter->Damage(5.0f, Session::DamageCause::Fall, x, z);
@@ -371,6 +391,12 @@ namespace perlite {
                 for (Session* s : players)
                     s->PlaySound("Teleport", x, y, z);
             }
+            break;
+        case projectile::DragonFireball:
+            // A cloud of breath that spreads from 3 to 7 blocks over thirty seconds.
+            BreathCloud(x, y, z, 3.0f, 600, 4.0f / 600.0f, m.owner);
+            for (Session* s : players)
+                s->SpawnParticle("minecraft:dragon_breath_fire", x, y, z);
             break;
         case projectile::XpBottle:
             SpawnXpOrbs(x, y, z, 3 + static_cast<int>(rng() % 5) + static_cast<int>(rng() % 5));

@@ -4,6 +4,7 @@
 #include "world/level/levelgen/vanilla/VanillaAquifer.hpp"
 #include "world/level/levelgen/vanilla/VanillaCarvers.hpp"
 #include "world/level/levelgen/vanilla/VanillaMaterials.hpp"
+#include "world/level/structure/Structures.hpp"
 
 #include <array>
 #include <memory>
@@ -21,11 +22,21 @@ namespace perlite::vanilla {
         size_t PreferredBatch() const override { return 1; }
         bool ThreadSafe() const override { return true; }
         bool HasBiomes() const override { return true; }
+        // The End decorates its chunks (pillars, chorus, islands); the nether its features.
+        bool Decorates() const override { return true; }
+        void Decorate(ChunkPos pos, const ChunkColumn* const region[], ChunkColumn& out) const override;
         bool LocateBiome(int biome, int fromX, int fromZ, int radius, const std::atomic<bool>& cancel, int& x, int& y,
                          int& z) override;
 
         int BiomeAt(int x, int y, int z) const;
         float Density(int x, int y, int z) const { return finalDensity->Eval(x, y, z); }
+        // The first air above the terrain at a column, from the density alone (0 over the void).
+        int SurfaceY(int x, int z) const {
+            for (int y = genMinY + genHeight - 1; y > genMinY; y--)
+                if (Density(x, y, z) > 0.0f)
+                    return y + 1;
+            return 0;
+        }
         int DimensionId() const { return dimension; }
         const DfPtr& FinalDensity() const { return finalDensity; }
         std::array<DfPtr, 6> ClimateRoots() const { return {temperature, vegetation, zero, erosion, zero, zero}; }
@@ -42,6 +53,11 @@ namespace perlite::vanilla {
         int EndBiome(int quartX, int quartY, int quartZ) const;
 
         int dimension = kNether;
+        int64_t worldSeed = 0;
+        std::shared_ptr<structure::StructureGenerator> structures;
+    public:
+        structure::StructureGenerator* Structures() const { return structures.get(); }
+    private:
         std::unique_ptr<DataPack> pack;
         std::unique_ptr<DensityGraph> graph;
         DfPtr finalDensity, temperature, vegetation, erosion, zero;

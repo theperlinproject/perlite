@@ -5,6 +5,7 @@
 #include "common/Json.hpp"
 #include "common/Log.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -161,5 +162,115 @@ namespace perlite::vanillapack {
         fs::remove_all(dir.string() + ".part", ec);
         LogWarn("Could not download the vanilla behavior pack: " + error);
         return have ? dir.string() : std::string();
+    }
+}
+
+#include "common/Json.hpp"
+
+#include <miniz.h>
+
+namespace perlite::vanillapack {
+    namespace {
+        constexpr const char* kLinks = "https://net-secondary.web.minecraft-services.net/api/v1.0/download/links";
+        constexpr const char* kKeep[] = {"behavior_packs/vanilla/structures/", "behavior_packs/vanilla/loot_tables/"};
+
+        bool HasStructures(const fs::path& dir) {
+            std::error_code ec;
+            return fs::is_directory(dir / "structures" / "village", ec) && fs::is_directory(dir / "loot_tables", ec);
+        }
+    }
+
+    bool ExtractStructures(const std::string& zipBytes, const std::string& target, size_t& kept, std::string& error) {
+        std::error_code ec;
+        const fs::path dir(target);
+        mz_zip_archive archive{};
+        if (!mz_zip_reader_init_mem(&archive, zipBytes.data(), zipBytes.size(), 0)) {
+            error = "not a zip file";
+            return false;
+        }
+        const fs::path part = dir.string() + ".part";
+        fs::remove_all(part, ec);
+        kept = 0;
+        const mz_uint count = mz_zip_reader_get_num_files(&archive);
+        for (mz_uint i = 0; i < count; i++) {
+            mz_zip_archive_file_stat st;
+            if (!mz_zip_reader_file_stat(&archive, i, &st) || st.m_is_directory)
+                continue;
+            std::string name = st.m_filename;
+            std::replace(name.begin(), name.end(), '\\', '/');
+            std::string rest;
+            for (const char* keep : kKeep)
+                if (const size_t at = name.find(keep); at != std::string::npos)
+                    rest = name.substr(at + std::string_view("behavior_packs/vanilla/").size());
+            if (rest.empty() || rest.contains(".."))
+                continue;
+            size_t size = 0;
+            void* data = mz_zip_reader_extract_to_heap(&archive, i, &size, 0);
+            if (!data)
+                continue;
+            const fs::path out = part / rest;
+            fs::create_directories(out.parent_path(), ec);
+            std::ofstream f(out, std::ios::binary);
+            f.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
+            mz_free(data);
+            kept++;
+        }
+        mz_zip_reader_end(&archive);
+        if (!HasStructures(part)) {
+            fs::remove_all(part, ec);
+            error = "no structure templates in it";
+            return false;
+        }
+        fs::remove_all(dir, ec);
+        fs::rename(part, dir, ec);
+        return HasStructures(dir);
+    }
+
+    std::string EnsureStructures(const std::string& dataDir, bool download) {
+        std::error_code ec;
+        const fs::path dir = fs::path(dataDir.empty() ? "." : dataDir) / "bds_vanilla_pack";
+        if (HasStructures(dir))
+            return dir.string();
+        if (const char* offline = std::getenv("PERLITE_OFFLINE"); offline && *offline && *offline != '0')
+            download = false;
+        if (!download)
+            return {};
+        std::string error;
+        https::Response links;
+        if (!https::Get(kLinks, links, &error) || links.status != 200) {
+            LogWarn("Could not look up the Bedrock Dedicated Server download: " + (error.empty() ? "HTTP " + std::to_string(links.status) : error));
+            return {};
+        }
+        json::Value doc;
+        std::string url;
+        if (json::Parse(links.body, doc))
+            for (const json::Value& l : doc["result"]["links"].items)
+                if (l["downloadType"].String() == "serverBedrockLinux")
+                    url = l["downloadUrl"].String();
+        if (url.empty()) {
+            LogWarn("The Bedrock Dedicated Server download list has no Linux server");
+            return {};
+        }
+        LogInfo("Downloading " + url + " for the vanilla structure templates and loot tables (the Minecraft EULA "
+                "applies: https://www.minecraft.net/eula)");
+        const auto began = std::chrono::steady_clock::now();
+        https::Response zip;
+        if (!https::Get(url, zip, &error) || zip.status != 200) {
+            LogWarn("Could not download the Bedrock Dedicated Server: " + (error.empty() ? "HTTP " + std::to_string(zip.status) : error));
+            return {};
+        }
+        size_t kept = 0;
+        if (!ExtractStructures(zip.body, dir, kept, error)) {
+            LogWarn("Could not keep the structures from the Bedrock Dedicated Server download: " + error);
+            return {};
+        }
+        {
+            std::ofstream marker(dir / "source.txt");
+            marker << url << '\n';
+        }
+        LogInfo("Kept " + std::to_string(kept) + " structure and loot table files from the server in " + dir.string() + " (" +
+                std::to_string(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - began).count()) +
+                " s)");
+        return HasStructures(dir) ? dir.string() : std::string();
     }
 }

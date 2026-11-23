@@ -350,3 +350,96 @@ namespace perlite {
         }
     }
 }
+
+#include "world/actor/ActorManager.hpp"
+#include "world/loot/Loot.hpp"
+#include "world/level/chunk/ChunkManager.hpp"
+#include "world/level/structure/Templates.hpp"
+
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
+namespace perlite {
+    namespace {
+        // Chest loot tables the built-in data lacks come from the structure pack's loot_tables
+        // folder (the same Bedrock pack the templates come from).
+        bool EnsureLootTable(const ServerConfig& config, const std::string& key) {
+            if (LootTables::Instance().Has(key))
+                return true;
+            static const std::string root = [&] {
+                const auto store = structure::TemplateStore::Find(config.structurePack, config.dataDir);
+                return store ? std::filesystem::path(store->Directory()).parent_path().string() : std::string();
+            }();
+            if (root.empty())
+                return false;
+            std::ifstream in(std::filesystem::path(root) / "loot_tables" / (key + ".json"));
+            if (!in)
+                return false;
+            std::stringstream text;
+            text << in.rdbuf();
+            std::string error;
+            return LootTables::Instance().Override(key, text.str(), error);
+        }
+    }
+
+    // A newly generated chunk's structure leftovers: chests are filled from their loot tables (the
+    // items scattered over the slots, as the game does) and the structure's mobs appear.
+    void Server::ConsumeGenerated(int dimension, ChunkPos pos) {
+        ChunkManager* world = LoadedWorld(dimension);
+        if (!world)
+            return;
+        const auto entry = world->Peek(pos);
+        if (!entry)
+            return;
+        if (entry->column.generatedNow) {
+            entry->column.generatedNow = false;
+            ContentOnNewChunk(dimension, pos, entry->column);
+        }
+        if (entry->column.generated.empty())
+            return;
+        std::vector<GeneratedExtra> extras = std::move(entry->column.generated);
+        entry->column.generated.clear();
+        for (const GeneratedExtra& e : extras) {
+            if (e.kind == GeneratedExtra::Loot) {
+                const int kind = ContainerKindOf(BlockRegistry::Instance().Name(BlockAt(dimension, e.x, e.y, e.z)));
+                if (kind < 0 || kind > 1)
+                    continue;
+                auto [it, fresh] = containers.try_emplace(Key(e.x, e.y, e.z, dimension));
+                BlockContainer& c = it->second;
+                c.kind = kind;
+                c.dimension = dimension;
+                c.x = e.x;
+                c.y = e.y;
+                c.z = e.z;
+                c.slots.assign(27, ItemStack{});
+                LootContext ctx;
+                ctx.rng = &worldRng;
+                std::vector<int> free;
+                for (int i = 0; i < 27; i++)
+                    free.push_back(i);
+                std::shuffle(free.begin(), free.end(), worldRng);
+                if (!EnsureLootTable(config, e.text))
+                    continue;
+                for (const LootDrop& d : LootTables::Instance().Roll(e.text, ctx)) {
+                    const CatalogItem* item = BlockCatalog::Instance().ItemByName(d.item);
+                    if (!item || free.empty())
+                        continue;
+                    ItemStack stack;
+                    stack.networkId = item->networkId;
+                    stack.count = static_cast<uint16_t>(std::clamp(d.count, 1, 64));
+                    c.slots[static_cast<size_t>(free.back())] = stack;
+                    free.pop_back();
+                }
+                blockEntityChunks.insert({dimension, pos.x, pos.z});
+            } else {
+                std::string id = e.text;
+                if (id == "minecraft:villager")
+                    id = "minecraft:villager_v2";
+                if (id == "minecraft:zombie_villager")
+                    id = "minecraft:zombie_villager_v2";
+                MobsIn(dimension).Spawn(id, e.x + 0.5, e.y, e.z + 0.5, true);
+            }
+        }
+    }
+}

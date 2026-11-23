@@ -1,5 +1,6 @@
 #include "common/Log.hpp"
 #include "server/Server.hpp"
+#include "world/level/end/DragonFight.hpp"
 #include "world/level/block/BlockCatalog.hpp"
 #include "world/level/block/Blocks.hpp"
 #include "world/actor/ActorManager.hpp"
@@ -107,10 +108,10 @@ namespace perlite {
         if (item.name == "minecraft:bucket" || (item.name.ends_with("_bucket") && item.name != "minecraft:milk_bucket" &&
                                                  item.name != "minecraft:powder_snow_bucket"))
             return UseBucket(by, item.name, true, x, y, z, face);
-        if ((item.name == "minecraft:flint_and_steel" || item.name == "minecraft:fire_charge") && dimension == kOverworld &&
+        if ((item.name == "minecraft:flint_and_steel" || item.name == "minecraft:fire_charge") &&
             NameOf(BlockAt(dimension, x, y, z)) == "minecraft:tnt") {
             ApplyBlock(dimension, x, y, z, BlockRegistry::kAir);
-            Mobs().SpawnPrimedTnt(x + 0.5, y, z + 0.5, 80);
+            MobsIn(dimension).SpawnPrimedTnt(x + 0.5, y, z + 0.5, 80);
             if (!by.Creative() && item.name == "minecraft:fire_charge") {
                 by.Inventory().TakeHeld(1);
                 by.SendSlot(by.Inventory().selected);
@@ -133,6 +134,8 @@ namespace perlite {
             }
             return true;
         }
+        if (item.name == "minecraft:end_crystal")
+            return fight->UseEndCrystal(by, x, y, z);
         if (item.name == "minecraft:ender_eye") {
             const uint16_t current = BlockAt(dimension, x, y, z);
             if (NameOf(current) != "minecraft:end_portal_frame")
@@ -219,8 +222,7 @@ namespace perlite {
         for (const ItemEntity& item : itemEntities)
             if (item.dimension == from)
                 who.HideItem(item.id);
-        if (from == kOverworld)
-            mobWorld->Hide(who);
+        MobsIn(from).Hide(who);
         World(dimension);
         who.SwitchDimension(dimension, x, y, z);
         for (Session* other : PlayersIn(dimension))
@@ -233,8 +235,7 @@ namespace perlite {
         for (const ItemEntity& item : itemEntities)
             if (item.dimension == dimension)
                 who.ShowItem(item);
-        if (dimension == kOverworld)
-            mobWorld->Show(who);
+        MobsIn(dimension).Show(who);
         SendWorldState(who);
         HookDimensionChange(who, from, dimension);
         static const char* kNames[] = {"overworld", "the_nether", "the_end"};
@@ -424,6 +425,9 @@ namespace perlite {
         const int from = who.DimensionId();
         if (endPortal) {
             if (from == kEnd) {
+                // The first trip home through the exit portal rolls the credits.
+                if (fight->FirstExit(who))
+                    who.ShowCredits();
                 ChangeDimension(who, kOverworld, SpawnX() + 0.5, SpawnY() + kEye, SpawnZ() + 0.5);
                 return;
             }
@@ -480,6 +484,15 @@ namespace perlite {
             const std::string upper = NameOf(world->GetBlock(bx, feet + 1, bz));
             const bool nether = lower == "minecraft:portal" || upper == "minecraft:portal";
             const bool end = lower == "minecraft:end_portal" || upper == "minecraft:end_portal";
+            const bool gateway = dim == kEnd && (lower == "minecraft:end_gateway" || upper == "minecraft:end_gateway" ||
+                                                 NameOf(world->GetBlock(bx, feet - 1, bz)) == "minecraft:end_gateway");
+            if (gateway) {
+                if (s->portalCooldown == 0) {
+                    s->portalCooldown = 1;
+                    fight->EnterGateway(*s, bx, feet, bz);
+                }
+                continue;
+            }
             if (!nether && !end) {
                 s->portalTicks = 0;
                 s->portalCooldown = 0;

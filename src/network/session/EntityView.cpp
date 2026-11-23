@@ -36,7 +36,9 @@ namespace perlite {
         proto::AddEntityPacket p;
         p.uniqueId = static_cast<int64_t>(mob.id);
         p.runtimeId = mob.id;
-        p.entityType = mob.def->id;
+        p.entityType = mob.def->wireId ? mob.def->wireId : mob.def->id;
+        if (mob.def->wireId && contentClient)
+            SendModChannel("perlin:entity", std::to_string(mob.id) + " " + mob.def->id);
         p.position = {static_cast<float>(mob.x), static_cast<float>(mob.y), static_cast<float>(mob.z)};
         p.velocity = {static_cast<float>(mob.vx), static_cast<float>(mob.vy), static_cast<float>(mob.vz)};
         p.pitch = mob.pitch;
@@ -139,6 +141,32 @@ namespace perlite {
         p.runtimeEntityId = id;
         p.eventId = static_cast<proto::EntityEventPacketEventId>(event);
         p.data = data;
+        Send(p);
+    }
+
+    void Session::BossBar(uint64_t entity, int type, const std::string& title, float progress) {
+        proto::BossEventPacket p;
+        p.targetEntityId = static_cast<int64_t>(entity);
+        p.type = static_cast<proto::BossEventPacketType>(type);
+        p.title = title;
+        p.filteredTitle = title;
+        p.progress = progress;
+        p.color = proto::BossEventPacketColor::Purple;
+        p.overlay = proto::BossEventPacketOverlay::Progress;
+        Send(p);
+    }
+
+    void Session::ShowCredits() {
+        proto::ShowCreditsPacket p;
+        p.runtimeEntityId = runtimeId;
+        p.status = 0;
+        Send(p);
+    }
+
+    void Session::SendModChannel(const std::string& channel, const std::string& body) {
+        proto::ScriptMessagePacket p;
+        p.messageId = "perlin:" + channel;
+        p.data = body;
         Send(p);
     }
 }

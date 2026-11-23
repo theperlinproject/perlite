@@ -1,4 +1,5 @@
 #include "server/Server.hpp"
+#include "world/level/end/DragonFight.hpp"
 
 #include <atomic>
 #include <fstream>
@@ -58,6 +59,7 @@ namespace perlite {
         }
         storage = std::move(world);
         LoadPortals();
+        fight->Load(storage->Directory());
         lastSave = std::chrono::steady_clock::now();
         return true;
     }
@@ -126,6 +128,7 @@ namespace perlite {
                 chunksSaved += w->SaveDirty();
         SaveContainers();
         SavePortals();
+        fight->Save();
         if (announce)
             storage->DrainSaves();
         storage->SaveLevel(CurrentLevelInfo());

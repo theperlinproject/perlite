@@ -2,10 +2,10 @@
 
 namespace perlite {
     void ActorManager::SpawnPack(const std::string& category, int x, int z, int surfaceY, bool chunkGen) {
-        const auto entry = server.Chunks().Peek({x >> 4, z >> 4});
+        const auto entry = World().Peek({x >> 4, z >> 4});
         if (!entry)
             return;
-        const json::Value* table = server.Chunks().Backend().Spawns(entry->column.GenBiome(x & 15, z & 15));
+        const json::Value* table = World().Backend().Spawns(entry->column.GenBiome(x & 15, z & 15));
         if (!table)
             return;
         const json::Value& list = (*table)[category];
@@ -45,7 +45,7 @@ namespace perlite {
             const int y = chunkGen ? SurfaceY(px, pz) : surfaceY;
             if (y <= kMinY)
                 continue;
-            const uint16_t ground = server.Chunks().GetBlock(px, y - 1, pz);
+            const uint16_t ground = World().GetBlock(px, y - 1, pz);
             if (water != BlockLiquid(ground) && !water)
                 continue;
             if (water && !BlockLiquid(ground))
@@ -82,7 +82,7 @@ namespace perlite {
     void ActorManager::NaturalSpawns() {
         if (!server.RuleValue("domobspawning"))
             return;
-        const std::vector<Session*> players = server.PlayersIn(kOverworld);
+        const std::vector<Session*> players = server.PlayersIn(dimension);
         if (players.empty())
             return;
         int monsters = 0, water = 0, ambient = 0;
@@ -104,7 +104,7 @@ namespace perlite {
             const double r = 24 + static_cast<double>(rng() % 80);
             const int x = static_cast<int>(std::floor(s->X() + std::cos(a) * r));
             const int z = static_cast<int>(std::floor(s->Z() + std::sin(a) * r));
-            if (!server.Chunks().Peek({x >> 4, z >> 4}))
+            if (!World().Peek({x >> 4, z >> 4}))
                 continue;
             const int surface = SurfaceY(x, z);
             if (surface <= kMinY)
@@ -113,12 +113,12 @@ namespace perlite {
                 int y = surface;
                 if (rng() % 3 == 0) {
                     y = kMinY + 8 + static_cast<int>(rng() % static_cast<unsigned>(std::max(1, surface - kMinY - 8)));
-                    while (y > kMinY + 1 && !BlockSolid(server.Chunks().GetBlock(x, y - 1, z)))
+                    while (y > kMinY + 1 && !BlockSolid(World().GetBlock(x, y - 1, z)))
                         y--;
-                    if (BlockSolid(server.Chunks().GetBlock(x, y, z)) || BlockSolid(server.Chunks().GetBlock(x, y + 1, z)))
+                    if (BlockSolid(World().GetBlock(x, y, z)) || BlockSolid(World().GetBlock(x, y + 1, z)))
                         y = surface;
                 }
-                if (Dark(x, y, z) && !BlockLiquid(server.Chunks().GetBlock(x, y - 1, z)))
+                if (Dark(x, y, z) && !BlockLiquid(World().GetBlock(x, y - 1, z)))
                     SpawnPack("monster", x, z, y, false);
             }
             if (water < static_cast<int>(5 * n) && rng() % 4 == 0)

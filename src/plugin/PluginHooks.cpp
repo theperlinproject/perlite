@@ -663,48 +663,48 @@ namespace perlite {
         return out;
     }
     Result<void> Server::OpEntityRemove(PluginCall&, const abi::EntityRemoveRequest& r) {
-        if (!mobWorld->Remove(r.entity))
+        if (!(ManagerOf(r.entity) ? *ManagerOf(r.entity) : *mobWorld).Remove(r.entity))
             return Fail(Status::NotFound);
         return {};
     }
     Result<bool> Server::OpEntityDamage(PluginCall&, const abi::EntityDamageRequest& r) {
-        if (!mobWorld->Find(r.entity))
+        if (!(ManagerOf(r.entity) ? ManagerOf(r.entity)->Find(r.entity) : nullptr))
             return Fail(Status::NotFound);
-        return mobWorld->Damage(r.entity, r.amount);
+        return (ManagerOf(r.entity) ? *ManagerOf(r.entity) : *mobWorld).Damage(r.entity, r.amount);
     }
     Result<void> Server::OpEntityTeleport(PluginCall&, const abi::EntityTeleportRequest& r) {
-        Mob* m = mobWorld->Find(r.entity);
+        Mob* m = (ManagerOf(r.entity) ? ManagerOf(r.entity)->Find(r.entity) : nullptr);
         if (!m)
             return Fail(Status::NotFound);
         m->x = r.x;
         m->y = r.y;
         m->z = r.z;
         m->vx = m->vy = m->vz = 0;
-        mobWorld->Moved(*m);
+        MobsIn(ManagerOf(m->id) ? ManagerOf(m->id)->Dimension() : 0).Moved(*m);
         return {};
     }
     Result<void> Server::OpEntitySetVelocity(PluginCall&, const abi::EntitySetVelocityRequest& r) {
-        Mob* m = mobWorld->Find(r.entity);
+        Mob* m = (ManagerOf(r.entity) ? ManagerOf(r.entity)->Find(r.entity) : nullptr);
         if (!m)
             return Fail(Status::NotFound);
         m->vx = r.x;
         m->vy = r.y;
         m->vz = r.z;
-        mobWorld->Moved(*m);
+        MobsIn(ManagerOf(m->id) ? ManagerOf(m->id)->Dimension() : 0).Moved(*m);
         return {};
     }
     Result<abi::ServerEntity> Server::OpEntityInfo(PluginCall&, const abi::EntityInfoRequest& r) {
-        const Mob* m = mobWorld->Find(r.entity);
+        const Mob* m = (ManagerOf(r.entity) ? ManagerOf(r.entity)->Find(r.entity) : nullptr);
         if (!m)
             return Fail(Status::NotFound);
         return EntityOf(*m);
     }
     Result<void> Server::OpEntitySetHealth(PluginCall&, const abi::EntitySetHealthRequest& r) {
-        Mob* m = mobWorld->Find(r.entity);
+        Mob* m = (ManagerOf(r.entity) ? ManagerOf(r.entity)->Find(r.entity) : nullptr);
         if (!m || m->deathTime > 0)
             return Fail(Status::NotFound);
         if (r.health <= 0) {
-            mobWorld->Kill(r.entity);
+            (ManagerOf(r.entity) ? *ManagerOf(r.entity) : *mobWorld).Kill(r.entity);
             return {};
         }
         m->health = std::min(r.health, m->maxHealth > 0 ? m->maxHealth : m->def->health);
@@ -804,7 +804,7 @@ namespace perlite {
         std::string type;
         if (FindSession(target))
             type = "minecraft:player";
-        else if (const Mob* m = mobWorld->Find(target))
+        else if (const Mob* m = (ManagerOf(target) ? ManagerOf(target)->Find(target) : nullptr))
             type = EntityOf(*m).type;
         if (plugins->Dispatch<abi::Event::PlayerAttack>({who.Id(), target, type, damage}))
             return true;
@@ -890,7 +890,7 @@ namespace perlite {
         if (!plugins->AnyoneListens(abi::Event::Explosion))
             return false;
         std::string type;
-        if (const Mob* m = mobWorld->Find(source))
+        if (const Mob* m = (ManagerOf(source) ? ManagerOf(source)->Find(source) : nullptr))
             type = EntityOf(*m).type;
         if (plugins->Dispatch<abi::Event::Explosion>({x, y, z, power, source, type}))
             return true;

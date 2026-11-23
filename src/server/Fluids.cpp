@@ -397,11 +397,11 @@ namespace perlite {
                 sound(lava ? "BucketEmptyLava" : "BucketEmptyWater", tx, ty, tz);
             }
             // A bucket of fish lets the fish go.
-            if (item.ends_with("_bucket") && item != "minecraft:water_bucket" && item != "minecraft:lava_bucket" && dim == kOverworld) {
+            if (item.ends_with("_bucket") && item != "minecraft:water_bucket" && item != "minecraft:lava_bucket") {
                 std::string mob = item.substr(0, item.size() - 7);
                 if (mob == "minecraft:tropical_fish")
                     mob = "minecraft:tropicalfish";
-                Mobs().Spawn(mob, tx + 0.5, ty, tz + 0.5, true);
+                MobsIn(dim).Spawn(mob, tx + 0.5, ty, tz + 0.5, true);
             }
         }
         takeHeld("minecraft:bucket");

@@ -218,6 +218,7 @@ namespace perlite {
         c.quartNet = quartNet;
         c.hasQuartBiomes = hasQuartBiomes;
         c.version = version;
+        c.generated = generated;
         return c;
     }
 

@@ -2,8 +2,19 @@
 
 namespace perlite {
     bool ActorManager::Hurt(Mob& m, float damage, double fromX, double fromZ, Session* by, float knockback) {
+        if (m.kind == actorkind::Crystal) {
+            // Anything that hits a crystal blows it up.
+            if (m.deathTime > 0)
+                return false;
+            DestroyCrystal(m, by);
+            return true;
+        }
         if (m.deathTime > 0 || m.kind != actorkind::Mob || damage <= 0)
             return false;
+        if (IsDragon(m)) {
+            DragonHurt(m, damage, fromX, fromZ, by);
+            return true;
+        }
         if (!m.projectile && (server.HookEntityDamage(m, damage, by) || damage <= 0))
             return false;
         float dealt = damage;
@@ -35,7 +46,7 @@ namespace perlite {
             m.target = by->Id();
             m.angry = true;
         }
-        for (Session* s : server.PlayersIn(kOverworld)) {
+        for (Session* s : server.PlayersIn(dimension)) {
             s->MobEvent(m.id, 2, 0);
             s->MobMotion(m);
         }
@@ -46,10 +57,12 @@ namespace perlite {
 
     bool ActorManager::Attack(Session& by, uint64_t entity, float damage, float knockback) {
         Mob* m = Find(entity);
-        if (!m || m->projectile || m->kind != actorkind::Mob)
+        if (!m || m->projectile || (m->kind != actorkind::Mob && m->kind != actorkind::Crystal))
             return false;
         const double dx = m->x - by.X(), dz = m->z - by.Z(), dy = m->y - (by.Y() - 1.62);
-        if (dx * dx + dy * dy + dz * dz > 7.0 * 7.0)
+        // The dragon is big: its reach is measured to the edge of its body.
+        const double reach = IsDragon(*m) ? 7.0 + 8.0 : 7.0;
+        if (dx * dx + dy * dy + dz * dz > reach * reach)
             return false;
         return Hurt(*m, by.GameMode() == 1 ? std::max(damage, 1000.0f) : damage, by.X(), by.Z(), &by, knockback);
     }
@@ -71,7 +84,7 @@ namespace perlite {
         m.variant = s.variant;
         m.health = m.maxHealth = s.health > 0 ? s.health : m.def->health;
         m.damage = s.damage;
-        for (Session* viewer : server.PlayersIn(kOverworld))
+        for (Session* viewer : server.PlayersIn(dimension))
             viewer->MobData(m);
     }
 
@@ -79,13 +92,13 @@ namespace perlite {
         m.deathTime = 1;
         m.health = 0;
         m.target = 0;
-        for (Session* s : server.PlayersIn(kOverworld))
+        for (Session* s : server.PlayersIn(dimension))
             s->MobEvent(m.id, 3, 0);
         if (m.projectile || m.kind != actorkind::Mob)
             return;
         if (!killer && m.lastAttacker && m.lastAttackerTicks > 0)
             killer = server.FindSession(m.lastAttacker);
-        if (killer && (!killer->InGame() || killer->DimensionId() != kOverworld))
+        if (killer && (!killer->InGame() || killer->DimensionId() != dimension))
             killer = nullptr;
         server.HookEntityDeath(m, killer);
         // Slimes and magma cubes split into 2 to 4 of the next size down.

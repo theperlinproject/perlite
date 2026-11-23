@@ -91,7 +91,7 @@ namespace perlite {
         broken.clear();
         if (!blast.breakBlocks)
             return;
-        const ChunkManager& world = server.Chunks();
+        const ChunkManager& world = World();
         const double x = blast.x, y = blast.y, z = blast.z;
         const float power = blast.power;
         const int cx = static_cast<int>(std::floor(x)), cy = static_cast<int>(std::floor(y)), cz = static_cast<int>(std::floor(z));
@@ -233,7 +233,7 @@ namespace perlite {
     void ActorManager::ApplyBlast(const Blast& blast, const std::vector<std::array<int, 3>>& broken) {
         const double x = blast.x, y = blast.y, z = blast.z;
         const float power = blast.power;
-        ChunkManager& world = server.Chunks();
+        ChunkManager& world = World();
         if (!broken.empty()) {
             const bool drops = server.RuleValue("dotiledrops") != 0;
             const bool decay = !blast.fromTnt || server.RuleValue("tntexplosiondropdecay");
@@ -245,19 +245,19 @@ namespace perlite {
                 if (id == BlockRegistry::kAir)
                     continue; // an earlier explosion this tick took it
                 if (IsTnt(id)) {
-                    server.SetBlockIn(kOverworld, b[0], b[1], b[2], BlockRegistry::kAir);
+                    server.SetBlockIn(dimension, b[0], b[1], b[2], BlockRegistry::kAir);
                     SpawnPrimedTnt(b[0] + 0.5, b[1], b[2] + 0.5, 10 + static_cast<int>(rng() % 20));
                     continue;
                 }
                 if (drops)
-                    server.DropBlockLoot(kOverworld, b[0], b[1], b[2], id, std::string(), decay ? power : 1.0f, nullptr);
-                server.SetBlockIn(kOverworld, b[0], b[1], b[2], BlockRegistry::kAir);
+                    server.DropBlockLoot(dimension, b[0], b[1], b[2], id, std::string(), decay ? power : 1.0f, nullptr);
+                server.SetBlockIn(dimension, b[0], b[1], b[2], BlockRegistry::kAir);
             }
         }
         const double reach = power * 2.0;
         // The flash and the bang: a few per tick are plenty, a thousand at once say no more.
         const bool effects = effectsThisTick++ < 24;
-        for (Session* s : server.PlayersIn(kOverworld)) {
+        for (Session* s : server.PlayersIn(dimension)) {
             const double dx = s->X() - x, dy = s->Y() - 1.0 - y, dz = s->Z() - z;
             const double d2 = dx * dx + dy * dy + dz * dz;
             if (effects && d2 < 256.0 * 256.0) {
@@ -279,6 +279,10 @@ namespace perlite {
             if (d >= reach)
                 return;
             const double impact = 1.0 - d / reach;
+            if (o.kind == actorkind::Crystal) {
+                DestroyCrystal(o, nullptr);
+                return;
+            }
             if (o.kind != actorkind::Mob) {
                 const double len = std::max(0.01, d);
                 o.vx += dx / len * impact;
@@ -341,7 +345,7 @@ namespace perlite {
                   server.RuleValue("mobgriefing"));
         m.health = 0;
         m.deathTime = 19;
-        for (Session* s : server.PlayersIn(kOverworld))
+        for (Session* s : server.PlayersIn(dimension))
             s->HideItem(m.id);
     }
 }

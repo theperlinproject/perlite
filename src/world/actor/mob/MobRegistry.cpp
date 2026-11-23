@@ -102,7 +102,35 @@ namespace perlite {
     const MobBehavior& MobRegistry::BehaviorOf(const MobDef* def) const {
         static const MobBehavior fallback;
         const MobType* type = TypeOf(def);
+        if (type && !type->behavior && def->baseId)
+            type = Find(def->baseId);
         return type && type->behavior ? *type->behavior : fallback;
+    }
+
+    const MobType* MobRegistry::AddContent(const std::string& id, const std::string& base, const std::string& wireId, float health,
+                                           float width, float height, float speed, float attack) {
+        const MobType* from = Find(base);
+        if (!from || id.empty() || id.starts_with("minecraft:"))
+            return nullptr;
+        static std::deque<std::string> names; // the strings the defs point at live as long as the program
+        MobDef def = from->def;
+        def.id = names.emplace_back(id).c_str();
+        def.baseId = from->def.id;
+        def.wireId = names.emplace_back(wireId.empty() ? std::string(from->def.id) : wireId).c_str();
+        if (health > 0)
+            def.health = health;
+        if (width > 0)
+            def.width = width;
+        if (height > 0)
+            def.height = height;
+        if (speed > 0)
+            def.speed = speed;
+        if (attack > 0)
+            def.damage = attack;
+        const MobType& added = Add(def, from->category, nullptr);
+        const_cast<MobType&>(added).sizes = from->sizes;
+        const_cast<MobType&>(added).variants = from->variants;
+        return &added;
     }
 
     const MobDef* FindMob(const char* identifier) {

@@ -104,8 +104,10 @@ namespace perlite {
                 Finish(batch, columns);
             else
                 backend->Generate(batch, columns);
-            for (ChunkColumn& c : columns)
+            for (ChunkColumn& c : columns) {
                 waterlog::FillGenerated(c);
+                c.generatedNow = true;
+            }
             std::lock_guard lock(mutex);
             for (size_t i = 0; i < batch.size(); i++) {
                 auto entry = std::make_shared<ChunkEntry>();
@@ -326,6 +328,7 @@ namespace perlite {
         else
             backend->Generate(batch, columns);
         waterlog::FillGenerated(columns[0]);
+        columns[0].generatedNow = true;
         auto entry = std::make_shared<ChunkEntry>();
         entry->column = std::move(columns[0]);
         chunks[pos] = entry;

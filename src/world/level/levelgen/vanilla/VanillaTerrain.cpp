@@ -151,6 +151,25 @@ namespace perlite::vanilla {
             const JavaDecorator* d = b->decorator.get();
             b->stages.temperature = [d](int biome, int x, int y, int z) { return d->Temperature(biome, x, y, z); };
         }
+        {
+            auto store = structure::TemplateStore::Find(config.structurePack, config.dataDir);
+            structure::WorldProbe probe;
+            probe.seed = static_cast<int64_t>(config.seed);
+            probe.dimension = kOverworld;
+            const VanillaCpuBackend* self = b.get();
+            probe.surface = [self](int x, int z) {
+                int ground = 0;
+                self->ColumnBiome(x, z, &ground);
+                return std::max(ground, kSeaLevel);
+            };
+            probe.ground = [self](int x, int z) {
+                int ground = 0;
+                self->ColumnBiome(x, z, &ground);
+                return ground;
+            };
+            probe.biome = [self](int x, int y, int z) { return self->BiomeAt(x, y, z); };
+            b->structures = std::make_shared<structure::StructureGenerator>(store, probe);
+        }
         return b;
     }
 

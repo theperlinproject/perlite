@@ -34,7 +34,6 @@ else()
 endif()
 
 option(PERLITE_NETHERNET "NetherNet transport (libdatachannel); without it only loopback connections work" ON)
-option(PERLITE_GPU "GPU terrain generation through conduit" OFF)
 option(PERLITE_EMBED "Build perlite_embed: the server without a wasm runtime, for hosts that bring their own (the Perlin client)" OFF)
 option(PERLITE_BUILD_SHARED "Build the perlite shared library with the C embedding API" ${PERLITE_TOP_LEVEL})
 option(PERLITE_BUILD_EXE "Build the perlite executable" ${PERLITE_TOP_LEVEL})
@@ -79,6 +78,7 @@ set(PERLITE_SOURCES
     src/network/session/SocialHandler.cpp
     src/network/session/WorldSync.cpp
     src/plugin/PluginHooks.cpp
+    src/plugin/Content.cpp
     src/plugin/PluginHost.cpp
     src/server/Config.cpp
     src/server/Server.cpp
@@ -115,6 +115,7 @@ set(PERLITE_SOURCES
     src/world/level/block/VoxelShapes.cpp
     src/world/actor/mob/VanillaMobs.cpp
     src/world/actor/projectile/Arrow.cpp
+    src/world/actor/boss/EnderDragon.cpp
     src/world/actor/spawn/NaturalSpawner.cpp
     src/world/container/Containers.cpp
     src/world/crafting/RecipeData.cpp
@@ -139,11 +140,18 @@ set(PERLITE_SOURCES
     src/world/level/levelgen/vanilla/VanillaAquifer.cpp
     src/world/level/levelgen/vanilla/VanillaCarvers.cpp
     src/world/level/levelgen/vanilla/VanillaDimension.cpp
+    src/world/level/levelgen/vanilla/NetherGen.cpp
+    src/world/level/end/EndGen.cpp
+    src/world/level/end/DragonFight.cpp
+    src/world/level/structure/JavaNbt.cpp
+    src/world/level/structure/JavaBlocks.cpp
+    src/world/level/structure/Templates.cpp
+    src/world/level/structure/Structures.cpp
+    src/world/level/structure/CodeStructures.cpp
     src/world/level/levelgen/vanilla/VanillaFeatures.cpp
     src/world/level/levelgen/vanilla/VanillaMaterials.cpp
     src/world/level/levelgen/vanilla/VanillaSurface.cpp
     src/world/level/levelgen/vanilla/VanillaTerrain.cpp
-    src/world/level/levelgen/gpu/VanillaGpuProgram.cpp
     src/world/level/portal/Portals.cpp
     src/protocol/NbtTree.cpp
     src/world/level/storage/LevelDb.cpp
@@ -162,16 +170,6 @@ if(PERLITE_NETHERNET)
         src/network/nethernet/ServerIdentity.cpp)
 else()
     list(APPEND PERLITE_SOURCES src/network/nethernet/NetherNetStub.cpp)
-endif()
-
-if(PERLITE_GPU)
-    include(PerliteGpu)
-    list(APPEND PERLITE_SOURCES
-        src/world/level/levelgen/gpu/GpuTerrainRhi.cpp
-        src/world/level/levelgen/gpu/GpuVanillaRhi.cpp
-        "${PERLITE_TERRAIN_PACK_CPP}")
-else()
-    list(APPEND PERLITE_SOURCES src/world/level/levelgen/gpu/GpuTerrainStub.cpp)
 endif()
 
 add_library(perlite_objects OBJECT ${PERLITE_SOURCES})
@@ -199,10 +197,6 @@ foreach(t perlite_objects ${PERLITE_LIBS})
         target_link_libraries(${t} PRIVATE leveldb)
         target_compile_definitions(${t} PRIVATE PERLITE_HAS_LEVELDB=1)
     endif()
-    if(PERLITE_GPU)
-        target_link_libraries(${t} PRIVATE conduit::conduit)
-        target_compile_definitions(${t} PRIVATE PERLITE_GPU=1)
-    endif()
     if(WIN32)
         target_compile_definitions(${t} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
         target_link_libraries(${t} PRIVATE ws2_32 crypt32 bcrypt iphlpapi advapi32 user32)
@@ -224,8 +218,7 @@ if(NOT MSVC)
         src/world/level/levelgen/vanilla/VanillaAquifer.cpp
         src/world/level/levelgen/vanilla/VanillaMaterials.cpp
         src/world/level/levelgen/vanilla/VanillaCarvers.cpp
-        src/world/level/levelgen/vanilla/VanillaDimension.cpp
-        src/world/level/levelgen/gpu/VanillaGpuProgram.cpp)
+        src/world/level/levelgen/vanilla/VanillaDimension.cpp)
     set_source_files_properties(${PERLITE_STRICT_FP} TARGET_DIRECTORY perlite_objects PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 

@@ -1,4 +1,6 @@
 #include "server/Server.hpp"
+#include "world/level/end/DragonFight.hpp"
+#include "world/level/structure/Templates.hpp"
 #include "common/ParallelFor.hpp"
 #include "world/level/block/Waterlog.hpp"
 #include "world/actor/mob/MobRegistry.hpp"
@@ -15,7 +17,6 @@
 #include "world/level/block/Blocks.hpp"
 #include "world/actor/ActorManager.hpp"
 #include "world/loot/Loot.hpp"
-#include "world/level/levelgen/gpu/GpuTerrain.hpp"
 #include "world/level/levelgen/vanilla/VanillaDimension.hpp"
 
 #include "protocol/Packets.hpp"
@@ -46,7 +47,11 @@ namespace perlite {
         tickRateTarget = std::max<uint32_t>(1, config.tickRate);
         loopback = std::make_unique<LoopbackListener>();
         plugins = std::make_unique<PluginHost>(*this);
-        mobWorld = std::make_unique<ActorManager>(*this);
+        for (int d = 0; d < kDimensionCount; d++)
+            mobWorlds[static_cast<size_t>(d)] = std::make_unique<ActorManager>(*this, d);
+        mobWorld = mobWorlds[0].get();
+        fight = std::make_unique<DragonFight>(*this);
+        fight->Load("");
     }
 
     Server::~Server() {
@@ -146,6 +151,15 @@ namespace perlite {
                     LogInfo("Loaded " + std::to_string(shapes) + " block shapes");
                 else
                     LogWarn("No block shapes (they come from the vanilla behavior pack): clients use full cubes");
+            }
+            // Structure templates and chest loot: a pack beside the server, or the one kept from
+            // the latest Bedrock Dedicated Server (downloaded on first start).
+            if (config.structurePack.empty() && !structure::TemplateStore::Find("", config.dataDir)) {
+                const std::string kept = vanillapack::EnsureStructures(config.dataDir, config.downloadStructures);
+                if (!kept.empty())
+                    config.structurePack = kept;
+                else
+                    LogWarn("No structure templates: villages, bastions and other template structures will not generate");
             }
             Recipes::Instance().Load();
             if (const CatalogItem* shield = catalog.ItemByName("minecraft:shield"))
@@ -425,14 +439,25 @@ namespace perlite {
             sections.Mark("items");
             for (const ChunkPos& ready : chunks->TakeReady()) {
                 LoadContainers(kOverworld, ready);
+                ConsumeGenerated(kOverworld, ready);
                 mobWorld->OnChunkReady(ready.x, ready.z);
             }
             for (size_t d = 0; d < otherWorlds.size(); d++)
                 if (otherWorlds[d])
-                    for (const ChunkPos& ready : otherWorlds[d]->TakeReady())
+                    for (const ChunkPos& ready : otherWorlds[d]->TakeReady()) {
                         LoadContainers(static_cast<int>(d), ready);
+                        ConsumeGenerated(static_cast<int>(d), ready);
+                        MobsIn(static_cast<int>(d)).OnChunkReady(ready.x, ready.z);
+                        if (static_cast<int>(d) == kEnd)
+                            fight->OnChunkReady(ready.x, ready.z);
+                    }
             sections.Mark("chunks ready");
             mobWorld->Tick();
+            for (int d = 1; d < kDimensionCount; d++)
+                if (LoadedWorld(d) && (!PlayersIn(d).empty() || MobsIn(d).Count() > 0))
+                    MobsIn(d).Tick();
+            fight->Tick();
+            TickContentSpawns();
             sections.Mark("mobs");
             TickContainers();
             sections.Mark("containers");
@@ -780,6 +805,13 @@ namespace perlite {
         }
     }
 
+    ActorManager* Server::ManagerOf(uint64_t entity) {
+        for (auto& m : mobWorlds)
+            if (m && m->Find(entity))
+                return m.get();
+        return nullptr;
+    }
+
     std::vector<Session*> Server::PlayersIn(int dimension) {
         std::vector<Session*> out;
         for (auto& [id, s] : sessions)
@@ -803,14 +835,7 @@ namespace perlite {
         if (!slot) {
             std::string error;
             const std::string label = dimension == kNether ? "nether" : "end";
-            std::unique_ptr<TerrainBackend> backend;
-            if (config.terrainBackend == "gpu" || config.terrainBackend == "auto") {
-                std::string note;
-                backend = CreateGpuDimensionBackend(config, dimension, note);
-                LogInfo("GPU terrain for the " + label + ": " + note);
-            }
-            if (!backend)
-                backend = vanilla::VanillaDimensionBackend::Create(config, dimension, error);
+            std::unique_ptr<TerrainBackend> backend = vanilla::VanillaDimensionBackend::Create(config, dimension, error);
             if (!backend) {
                 LogError("Could not start the " + label + ": " + error);
                 return *chunks;
@@ -862,6 +887,9 @@ namespace perlite {
                                         static_cast<int>(std::floor(s->Z() * scale)) >> 4},
                                        2});
                 }
+            if (dim == kEnd && !viewers.empty())
+                for (const auto& [x, z, r] : fight->Anchors())
+                    viewers.push_back({{x, z}, r});
             if (viewers.empty())
                 continue;
             world->UnloadFar(viewers, kMargin);
@@ -969,7 +997,7 @@ namespace perlite {
             if (item.dimension == joined.DimensionId())
                 joined.ShowItem(item);
         if (joined.DimensionId() == kOverworld)
-            mobWorld->Show(joined);
+            MobsIn(joined.DimensionId()).Show(joined);
         SendWorldState(joined);
         plugins->Dispatch<abi::Event::PlayerJoin>({joined.Id(), joined.Name()});
         // Already logged above with the address; tell the players without a second console line.
@@ -1345,21 +1373,7 @@ namespace perlite {
     void Server::SpawnXp(int dim, double x, double y, double z, int amount) {
         if (amount <= 0)
             return;
-        if (dim != kOverworld) {
-            Session* best = nullptr;
-            double bestD = 1e18;
-            for (Session* s : PlayersIn(dim)) {
-                const double dx = s->X() - x, dy = s->Y() - y, dz = s->Z() - z;
-                if (dx * dx + dy * dy + dz * dz < bestD) {
-                    bestD = dx * dx + dy * dy + dz * dz;
-                    best = s;
-                }
-            }
-            if (best && bestD < 64.0 * 64.0)
-                best->AddExperience(amount);
-            return;
-        }
-        mobWorld->SpawnXpOrbs(x, y, z, amount);
+        MobsIn(dim).SpawnXpOrbs(x, y, z, amount);
     }
 
     std::expected<int, abi::Status> Server::GiveItem(uint64_t player, const std::string& itemName,

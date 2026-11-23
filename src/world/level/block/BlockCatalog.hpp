@@ -60,7 +60,12 @@ namespace perlite {
         uint16_t Resolve(std::string_view state) const;
         std::string StateText(uint16_t id) const;
         bool KnownHash(int32_t hash) const { return states.contains(hash); }
-        bool Knows(const std::string& fullName) const { return defaultByName.contains(fullName); }
+        bool Knows(const std::string& fullName) const { return defaultByName.contains(fullName) || aliases.contains(fullName); }
+        // A name that stands for another block or item (content mods' blocks and items, simulated as
+        // their base). Thread-safe to read once registered before use.
+        void Alias(const std::string& name, const std::string& target);
+        void Unalias(const std::string& name);
+        std::string Unaliased(const std::string& name) const;
         size_t StateCount() const { return states.size(); }
 
         static std::string FindFile(const std::string& dir, const std::string& name);
@@ -76,6 +81,7 @@ namespace perlite {
         std::vector<CatalogItem> items;
         std::vector<int16_t> creativeEntries;
         std::unordered_map<std::string, int32_t> defaultByName;
+        std::unordered_map<std::string, std::string> aliases;
         std::unordered_map<int16_t, size_t> byId;
         std::unordered_map<int32_t, size_t> byHash;
         std::unordered_map<std::string, size_t> byName;

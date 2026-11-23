@@ -318,6 +318,20 @@ namespace perlite {
             out.push_back(FloatEntry(proto::MetadataDictionaryEntryKey::BoundingboxHeight, body.height));
             if (mob.variant >= 0)
                 out.push_back(IntEntry(proto::MetadataDictionaryEntryKey::Variant, mob.variant));
+            if (mob.kind == actorkind::Crystal) {
+                // Where the crystal's beam points; at its own block when it has none.
+                proto::MetadataDictionaryEntry target;
+                target.key = proto::MetadataDictionaryEntryKey::BlockTarget;
+                target.type = proto::MetadataDictionaryEntryType::Vec3I;
+                target.legacyType = static_cast<uint8_t>(target.type);
+                auto& inner = target.value.template emplace<4>();
+                if (mob.beam)
+                    inner.template emplace<7>(proto::Vec3I{mob.beamX, mob.beamY, mob.beamZ});
+                else
+                    inner.template emplace<7>(proto::Vec3I{static_cast<int32_t>(std::floor(mob.x)), static_cast<int32_t>(std::floor(mob.y)),
+                                                           static_cast<int32_t>(std::floor(mob.z))});
+                out.push_back(target);
+            }
             if (mob.kind == actorkind::Projectile && mob.owner != 0) {
                 // Who shot it: the client draws the arrow as theirs and does not hit them with it.
                 proto::MetadataDictionaryEntry owner;
