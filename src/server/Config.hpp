@@ -16,6 +16,9 @@ namespace perlite {
         std::string motd = "A Perlite server";
         std::string levelName = "world";
         std::string dataDir = ".";
+        // Where the vanilla behavior pack (kept from the Bedrock Dedicated Server download) lives; empty
+        // = the data folder. A host with many worlds (Perlin's singleplayer) shares one copy.
+        std::string vanillaPackDir;
         bool xboxAuth = false;
         std::vector<std::string> authRootKeys;
         std::string pluginDir;

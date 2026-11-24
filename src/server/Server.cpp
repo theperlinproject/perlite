@@ -112,7 +112,15 @@ namespace perlite {
                 BedrockData& vanilla = BedrockData::Instance();
                 const std::filesystem::path dir = BedrockData::Find(config.blockDataDir);
                 std::string vanillaError;
-                if (!dir.empty() && vanilla.Load(dir, vanillaError)) {
+                bool vanillaLoaded = !dir.empty() && vanilla.Load(dir, vanillaError);
+                if (!vanillaLoaded) {
+                    if (!dir.empty())
+                        LogWarn("Vanilla item data in " + dir.string() + " is unusable (" + vanillaError +
+                                "): using the built-in copy");
+                    vanillaError.clear();
+                    vanillaLoaded = vanilla.LoadBuiltin(vanillaError);
+                }
+                if (vanillaLoaded) {
                     std::vector<CatalogItem> items;
                     items.reserve(vanilla.Items().size());
                     for (const VanillaItem& v : vanilla.Items()) {
@@ -137,7 +145,8 @@ namespace perlite {
             // Mob sizes, scale, health and speed, the block shapes, recipes, structures and loot
             // come from Mojang's vanilla behavior pack, kept from the Bedrock Dedicated Server
             // download on first start (it is not shipped with Perlite).
-            const std::string pack = vanillapack::Ensure(config.dataDir, config.downloadVanillaPack || config.downloadStructures);
+            const std::string pack = vanillapack::Ensure(config.vanillaPackDir.empty() ? config.dataDir : config.vanillaPackDir,
+                                                         config.downloadVanillaPack || config.downloadStructures);
             {
                 Recipes::Instance().SetPackDir(pack);
                 const size_t read = VanillaEntities::Instance().Load(pack);

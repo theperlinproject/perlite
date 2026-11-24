@@ -7,6 +7,7 @@
 #include "common/FileIo.hpp"
 #include "server/Config.hpp"
 #include "server/VanillaPack.hpp"
+#include "server/vanilla/BedrockData.hpp"
 #include <miniz.h>
 #include "world/actor/mob/VanillaEntities.hpp"
 #include "world/level/block/VoxelShapes.hpp"
@@ -339,6 +340,25 @@ int main(int argc, char** argv) {
     TestChunkQueueOrder();
     TestVoxelShapes();
     TestWaterlogging();
+    // The item list compiled into Perlite matches the data/bedrock copy it was made from, so a server
+    // without that folder (the one embedded in Perlin) still lets Bedrock clients join.
+    {
+        BedrockData builtin;
+        std::string error;
+        CHECK(builtin.LoadBuiltin(error));
+        CHECK(builtin.Items().size() > 1000);
+        CHECK(!builtin.ItemComponents().empty());
+        CHECK(!builtin.BlockProperties().empty());
+        const auto dir = BedrockData::Find("");
+        if (!dir.empty()) {
+            BedrockData files;
+            CHECK(files.Load(dir, error));
+            CHECK(files.Items().size() == builtin.Items().size());
+            CHECK(files.ItemComponents().size() == builtin.ItemComponents().size());
+            CHECK(files.BlockProperties().size() == builtin.BlockProperties().size());
+            CHECK(files.Items().front().name == builtin.Items().front().name);
+        }
+    }
     const char* pack = std::getenv("PERLITE_VANILLA_PACK");
     if (pack && *pack) {
         TestVanillaEntities(pack);

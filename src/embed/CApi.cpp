@@ -86,6 +86,8 @@ PERLITE_API perlite_server* perlite_create(const perlite_options* options) {
                     config.generator = over["generator"].text;
                 if (over["block_data_dir"].IsString())
                     config.blockDataDir = over["block_data_dir"].text;
+                if (over["vanilla_pack_dir"].IsString())
+                    config.vanillaPackDir = over["vanilla_pack_dir"].text;
                 if (over["max_threads"].Int(0) > 0)
                     config.maxThreads =
                         static_cast<decltype(config.maxThreads)>(std::clamp<int64_t>(over["max_threads"].Int(), 1, 256));

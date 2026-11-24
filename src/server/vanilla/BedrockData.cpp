@@ -3,7 +3,18 @@
 #include "common/FileIo.hpp"
 #include "common/Json.hpp"
 
+#include <cstddef>
 #include <cstring>
+#include <span>
+
+namespace perlite::bedrock_embedded {
+    extern const unsigned char items_json[];
+    extern const std::size_t items_json_size;
+    extern const unsigned char item_components_bin[];
+    extern const std::size_t item_components_bin_size;
+    extern const unsigned char block_properties_bin[];
+    extern const std::size_t block_properties_bin_size;
+}
 
 #ifndef PERLITE_BEDROCK_DIR
 #define PERLITE_BEDROCK_DIR ""
@@ -13,12 +24,8 @@ namespace perlite {
     namespace fs = std::filesystem;
 
     namespace {
-        bool ReadBlobs(const fs::path& path, std::vector<NamedNbt>& out, std::string& error) {
-            std::vector<uint8_t> data;
-            if (!file::ReadBytes(path, data)) {
-                error = "cannot read " + path.string();
-                return false;
-            }
+        bool ParseBlobs(std::span<const uint8_t> data, const std::string& label, std::vector<NamedNbt>& out,
+                        std::string& error) {
             size_t at = 0;
             const auto take = [&](void* dst, size_t n) {
                 if (at + n > data.size())
@@ -29,7 +36,7 @@ namespace perlite {
             };
             uint32_t count = 0;
             if (!take(&count, 4)) {
-                error = path.string() + " is truncated";
+                error = label + " is truncated";
                 return false;
             }
             out.clear();
@@ -39,22 +46,31 @@ namespace perlite {
                 uint32_t nbtLen = 0;
                 NamedNbt entry;
                 if (!take(&nameLen, 2)) {
-                    error = path.string() + " is truncated";
+                    error = label + " is truncated";
                     return false;
                 }
                 entry.name.resize(nameLen);
                 if (!take(entry.name.data(), nameLen) || !take(&nbtLen, 4)) {
-                    error = path.string() + " is truncated";
+                    error = label + " is truncated";
                     return false;
                 }
                 entry.nbt.resize(nbtLen);
                 if (!take(entry.nbt.data(), nbtLen)) {
-                    error = path.string() + " is truncated";
+                    error = label + " is truncated";
                     return false;
                 }
                 out.push_back(std::move(entry));
             }
             return true;
+        }
+
+        bool ReadBlobs(const fs::path& path, std::vector<NamedNbt>& out, std::string& error) {
+            std::vector<uint8_t> data;
+            if (!file::ReadBytes(path, data)) {
+                error = "cannot read " + path.string();
+                return false;
+            }
+            return ParseBlobs(data, path.string(), out, error);
         }
     }
 
@@ -79,15 +95,10 @@ namespace perlite {
         return {};
     }
 
-    bool BedrockData::Load(const fs::path& dir, std::string& error) {
-        std::string text;
-        if (!file::Read(dir / "items.json", text)) {
-            error = "cannot read " + (dir / "items.json").string();
-            return false;
-        }
+    bool BedrockData::ParseItems(const std::string& text, const std::string& label, std::string& error) {
         json::Value root;
         if (!json::Parse(text, root) || !root.IsArray()) {
-            error = (dir / "items.json").string() + " is not a JSON array";
+            error = label + " is not a JSON array";
             return false;
         }
         items.clear();
@@ -100,13 +111,39 @@ namespace perlite {
             if (!item.name.empty())
                 items.push_back(std::move(item));
         }
-        if (!ReadBlobs(dir / "item_components.bin", itemComponents, error) ||
+        if (items.empty()) {
+            error = label + " lists no items";
+            return false;
+        }
+        return true;
+    }
+
+    bool BedrockData::Load(const fs::path& dir, std::string& error) {
+        loaded = false;
+        std::string text;
+        if (!file::Read(dir / "items.json", text)) {
+            error = "cannot read " + (dir / "items.json").string();
+            return false;
+        }
+        if (!ParseItems(text, (dir / "items.json").string(), error) ||
+            !ReadBlobs(dir / "item_components.bin", itemComponents, error) ||
             !ReadBlobs(dir / "block_properties.bin", blockProperties, error))
             return false;
+        loaded = true;
+        return true;
+    }
 
-        loaded = !items.empty();
-        if (!loaded)
-            error = (dir / "items.json").string() + " lists no items";
-        return loaded;
+    bool BedrockData::LoadBuiltin(std::string& error) {
+        using namespace bedrock_embedded;
+        loaded = false;
+        const std::string text(reinterpret_cast<const char*>(items_json), items_json_size);
+        if (!ParseItems(text, "the built-in items.json", error) ||
+            !ParseBlobs({item_components_bin, item_components_bin_size}, "the built-in item_components.bin",
+                        itemComponents, error) ||
+            !ParseBlobs({block_properties_bin, block_properties_bin_size}, "the built-in block_properties.bin",
+                        blockProperties, error))
+            return false;
+        loaded = true;
+        return true;
     }
 }

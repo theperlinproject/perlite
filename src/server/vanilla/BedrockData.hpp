@@ -24,6 +24,8 @@ namespace perlite {
         static BedrockData& Instance();
 
         bool Load(const std::filesystem::path& dir, std::string& error);
+        // The copy compiled into Perlite at build time, for when no data/bedrock folder is found.
+        bool LoadBuiltin(std::string& error);
         bool Loaded() const { return loaded; }
 
         const std::vector<VanillaItem>& Items() const { return items; }
@@ -33,6 +35,8 @@ namespace perlite {
         static std::filesystem::path Find(const std::string& hint);
 
     private:
+        bool ParseItems(const std::string& text, const std::string& label, std::string& error);
+
         bool loaded = false;
         std::vector<VanillaItem> items;
         std::vector<NamedNbt> itemComponents;

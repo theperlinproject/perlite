@@ -174,6 +174,7 @@ else()
     list(APPEND PERLITE_SOURCES src/network/nethernet/NetherNetStub.cpp)
 endif()
 
+list(APPEND PERLITE_SOURCES "${PERLITE_BEDROCK_EMBED}")
 add_library(perlite_objects OBJECT ${PERLITE_SOURCES})
 add_library(perlite_core STATIC $<TARGET_OBJECTS:perlite_objects> ${PERLITE_WASM_SOURCES})
 target_link_libraries(perlite_core PRIVATE ${PERLITE_WASM_LIB})
