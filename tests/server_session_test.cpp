@@ -15,7 +15,9 @@
 #include "world/level/block/Blocks.hpp"
 #include "support/ChunkCodec.hpp"
 
+#include <chrono>
 #include <cmath>
+#include <random>
 #include <filesystem>
 
 using namespace perlite;
@@ -28,7 +30,10 @@ using namespace perlite::testclient;
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
-    const fs::path plugins = fs::temp_directory_path() / "perlite_session_plugins";
+    // Folders of this run only, so test runs side by side (ctest -j, two checkouts) do not collide.
+    const std::string run = std::to_string(std::random_device{}()) + "_" +
+                            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const fs::path plugins = fs::temp_directory_path() / ("perlite_session_plugins_" + run);
     fs::remove_all(plugins);
     fs::create_directories(plugins);
     if (argc > 1)
@@ -43,7 +48,7 @@ int main(int argc, char** argv) {
     config.pluginDir = plugins.string();
     config.viewDistance = 6;
     config.operators = {"Alice"};
-    config.dataDir = (fs::temp_directory_path() / "perlite_session_data").string();
+    config.dataDir = (fs::temp_directory_path() / ("perlite_session_data_" + run)).string();
     config.worldStorage = "none";
     fs::create_directories(config.dataDir);
     for (const char* f : {"/ops.json", "/whitelist.json", "/allowlist.json", "/permissions.json"})
@@ -294,6 +299,8 @@ int main(int argc, char** argv) {
         }
         alice.Send(place);
         alice.Settle();
+        bob.SettleFor<proto::UpdateBlockPacket>();
+        alice.SettleFor<proto::UpdateBlockPacket>();
         bob.Settle();
         std::string name;
         CHECK(server.GetBlock(2, -60, 2, name) == perlin::abi::Status::Ok && name == "minecraft:stone");
@@ -1332,6 +1339,7 @@ int main(int argc, char** argv) {
         survival.Stop();
     }
     fs::remove_all(plugins);
+    fs::remove_all(config.dataDir);
     if (const int bad = Session::MalformedSends().load(); bad != 0) {
         std::fprintf(stderr, "server refused to send %d malformed packet(s)\n", bad);
         g_failed++;

@@ -1,5 +1,7 @@
 #include "common/TaskGroup.hpp"
 #include "network/auth/LoginVerifier.hpp"
+
+#include "common/Https.hpp"
 #include "common/JsonText.hpp"
 
 #include <openssl/bn.h>
@@ -519,79 +521,14 @@ namespace perlite::auth {
 
 #ifdef PERLITE_HAS_SSL
     namespace {
-        bool SplitUrl(const std::string& url, std::string& host, std::string& path) {
-            if (!url.starts_with("https://"))
-                return false;
-            const size_t slash = url.find('/', 8);
-            host = url.substr(8, slash == std::string::npos ? std::string::npos : slash - 8);
-            path = slash == std::string::npos ? "/" : url.substr(slash);
-            return !host.empty();
-        }
-
+        // The shared HTTPS client (system roots on every platform; a clean failure in builds
+        // without sockets, such as the web one).
         bool HttpsGet(const std::string& url, std::string& body) {
-            std::string host, path;
-            if (!SplitUrl(url, host, path))
+            https::Response r;
+            if (!https::Get(url, r, nullptr) || r.status != 200)
                 return false;
-            SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
-            if (!ctx)
-                return false;
-            SSL_CTX_set_default_verify_paths(ctx);
-            SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
-            BIO* bio = BIO_new_ssl_connect(ctx);
-            bool ok = false;
-            if (bio) {
-                SSL* ssl = nullptr;
-                BIO_get_ssl(bio, &ssl);
-                const std::string target = host + ":443";
-                BIO_set_conn_hostname(bio, target.c_str());
-                if (ssl) {
-                    SSL_set_tlsext_host_name(ssl, host.c_str());
-                    SSL_set1_host(ssl, host.c_str());
-                }
-                if (BIO_do_connect(bio) == 1 && BIO_do_handshake(bio) == 1) {
-                    const std::string request = "GET " + path + " HTTP/1.1\r\nHost: " + host +
-                                                "\r\nAccept: application/json\r\nUser-Agent: PerlinServer\r\nConnection: close\r\n\r\n";
-                    if (BIO_write(bio, request.data(), static_cast<int>(request.size())) == static_cast<int>(request.size())) {
-                        std::string response;
-                        char buf[4096];
-                        for (;;) {
-                            const int n = BIO_read(bio, buf, sizeof buf);
-                            if (n <= 0)
-                                break;
-                            response.append(buf, static_cast<size_t>(n));
-                            if (response.size() > (4u << 20))
-                                break;
-                        }
-                        const size_t split = response.find("\r\n\r\n");
-                        if (split != std::string::npos && response.starts_with("HTTP/1.1 200")) {
-                            const std::string head = response.substr(0, split);
-                            body = response.substr(split + 4);
-                            std::string lower = head;
-                            for (char& c : lower)
-                                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                            if (lower.contains("transfer-encoding: chunked")) {
-                                std::string joined;
-                                size_t at = 0;
-                                while (at < body.size()) {
-                                    const size_t eol = body.find("\r\n", at);
-                                    if (eol == std::string::npos)
-                                        break;
-                                    const size_t size = std::strtoul(body.substr(at, eol - at).c_str(), nullptr, 16);
-                                    if (size == 0)
-                                        break;
-                                    joined += body.substr(eol + 2, size);
-                                    at = eol + 2 + size + 2;
-                                }
-                                body = std::move(joined);
-                            }
-                            ok = true;
-                        }
-                    }
-                }
-                BIO_free_all(bio);
-            }
-            SSL_CTX_free(ctx);
-            return ok;
+            body = std::move(r.body);
+            return true;
         }
 
         bool RefreshTokenKeys() {

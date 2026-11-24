@@ -62,6 +62,21 @@ namespace perlite::testclient {
             Drain();
         }
 
+        // Ticks until a packet of type P has arrived (or the limit passes): for checks whose answer
+        // can take a few ticks on a slow or busy machine.
+        template <class P> bool SettleFor(int maxTicks = 200) {
+            for (int i = 0; i < maxTicks; i++) {
+                Drain();
+                for (const Received& r : inbox)
+                    if (r.id == P::kId)
+                        return true;
+                server.Tick();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            Drain();
+            return false;
+        }
+
         void Drain() {
             std::vector<uint8_t> wire;
             while (endpoint->Receive(wire)) {

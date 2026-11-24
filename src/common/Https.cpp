@@ -1,5 +1,6 @@
 #include "common/Https.hpp"
 
+#include <openssl/opensslconf.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
@@ -24,7 +25,7 @@ namespace perlite::https {
         }
 
         // OpenSSL's default paths are empty on Windows; the trusted roots live in the system store.
-        void LoadSystemRoots(SSL_CTX* ctx) {
+        [[maybe_unused]] void LoadSystemRoots(SSL_CTX* ctx) {
             SSL_CTX_set_default_verify_paths(ctx);
 #ifdef _WIN32
             X509_STORE* store = SSL_CTX_get_cert_store(ctx);
@@ -71,6 +72,14 @@ namespace perlite::https {
         }
 
         bool Connect(const std::string& host, std::string* error) {
+#if defined(OPENSSL_NO_SOCK) || defined(__EMSCRIPTEN__)
+            // A build without sockets (the web build's OpenSSL is configured no-sock): there is
+            // no way to reach the host, so every request fails cleanly instead.
+            (void)host;
+            if (error)
+                *error = "HTTPS downloads are not available in this build";
+            return false;
+#else
             if (!ctx) {
                 ctx = SSL_CTX_new(TLS_client_method());
                 if (!ctx) {
@@ -99,6 +108,7 @@ namespace perlite::https {
                 return false;
             }
             return true;
+#endif
         }
 
         // Makes sure the buffer holds at least n bytes; false when the connection ends first.
