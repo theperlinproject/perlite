@@ -4,6 +4,8 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -31,10 +33,41 @@ namespace perlite::vanilla {
         return static_cast<int64_t>(out);
     }
 
+    using OverworldFill = std::array<uint8_t, static_cast<size_t>(16 * ChunkColumn::kQuartLayers)>;
+    using FillPtr = std::shared_ptr<const OverworldFill>;
+
+    // Biome fills shared by every generation thread of one backend, so a chunk's
+    // climate search runs once instead of once per thread that touches it.
+    struct SharedFillCache {
+        static constexpr int kShards = 32;
+        static constexpr size_t kShardLimit = 512;
+        struct Shard {
+            std::mutex mutex;
+            std::unordered_map<uint64_t, FillPtr> map;
+        };
+        std::array<Shard, kShards> shards;
+        Shard& For(uint64_t key) { return shards[(key * 0x9E3779B97F4A7C15ull) >> 59]; }
+        FillPtr Find(uint64_t key) {
+            Shard& s = For(key);
+            std::lock_guard lock(s.mutex);
+            const auto it = s.map.find(key);
+            return it == s.map.end() ? nullptr : it->second;
+        }
+        FillPtr Insert(uint64_t key, FillPtr fill) {
+            Shard& s = For(key);
+            std::lock_guard lock(s.mutex);
+            if (s.map.size() >= kShardLimit)
+                s.map.clear();
+            const auto [it, added] = s.map.try_emplace(key, std::move(fill));
+            return it->second;
+        }
+    };
+
     namespace {
-        using OverworldFill = std::array<uint8_t, static_cast<size_t>(16 * ChunkColumn::kQuartLayers)>;
+        // Per-thread front cache; it holds references so pointers handed out stay
+        // valid until this thread itself evicts them, whatever the shared cache does.
         struct FillCache {
-            std::unordered_map<uint64_t, std::unique_ptr<OverworldFill>> map;
+            std::unordered_map<uint64_t, FillPtr> map;
             uint64_t owner = 0;
         };
         FillCache& Fills(uint64_t owner) {
@@ -52,6 +85,19 @@ namespace perlite::vanilla {
         }
     }
 
+    const uint8_t* VanillaCpuBackend::CachedFill(int chunkX, int chunkZ) const {
+        const uint64_t key = FillKey(chunkX, chunkZ);
+        FillCache& local = Fills(instance);
+        if (const auto it = local.map.find(key); it != local.map.end())
+            return it->second->data();
+        if (FillPtr shared = sharedFills->Find(key)) {
+            const uint8_t* out = shared->data();
+            local.map.emplace(key, std::move(shared));
+            return out;
+        }
+        return nullptr;
+    }
+
     const uint8_t* VanillaCpuBackend::SearchFill(int chunkX, int chunkZ, const int32_t* targets) const {
         constexpr int layers = ChunkColumn::kQuartLayers;
         auto fill = std::make_unique<OverworldFill>();
@@ -65,23 +111,23 @@ namespace perlite::vanilla {
                         hint = FindBiomePoint(t, hint);
                         (*fill)[static_cast<size_t>(ChunkColumn::QuartIndex(qx, qy, qz))] = kBiomePointBiome[hint];
                     }
-        FillCache& cache = Fills(instance);
-        const uint8_t* out = fill->data();
-        cache.map[FillKey(chunkX, chunkZ)] = std::move(fill);
+        const uint64_t key = FillKey(chunkX, chunkZ);
+        FillPtr kept = sharedFills->Insert(key, FillPtr(std::move(fill)));
+        const uint8_t* out = kept->data();
+        Fills(instance).map[key] = std::move(kept);
         return out;
     }
 
     void VanillaCpuBackend::PrimeChunkFill(int chunkX, int chunkZ, const int32_t* targets) const {
-        if (Fills(instance).map.contains(FillKey(chunkX, chunkZ)))
+        if (CachedFill(chunkX, chunkZ))
             return;
         SearchFill(chunkX, chunkZ, targets);
     }
 
     const uint8_t* VanillaCpuBackend::ChunkFill(int chunkX, int chunkZ) const {
         constexpr int layers = ChunkColumn::kQuartLayers;
-        FillCache& cache = Fills(instance);
-        if (const auto it = cache.map.find(FillKey(chunkX, chunkZ)); it != cache.map.end())
-            return it->second->data();
+        if (const uint8_t* cached = CachedFill(chunkX, chunkZ))
+            return cached;
         std::array<int, layers> ys{};
         for (int qy = 0; qy < layers; qy++)
             ys[static_cast<size_t>(qy)] = ((kMinY >> 2) + qy) * 4;
@@ -116,6 +162,7 @@ namespace perlite::vanilla {
                                                                  std::string& error) {
         std::unique_ptr<VanillaCpuBackend> b(new VanillaCpuBackend());
         b->instance = NextBackendInstance();
+        b->sharedFills = std::make_shared<SharedFillCache>();
         b->pack = DataPack::Embedded();
         b->graph = std::make_unique<DensityGraph>(*b->pack, static_cast<int64_t>(config.seed));
         b->finalDensity = b->graph->Load("minecraft:overworld/final_density");
@@ -151,7 +198,7 @@ namespace perlite::vanilla {
             const JavaDecorator* d = b->decorator.get();
             b->stages.temperature = [d](int biome, int x, int y, int z) { return d->Temperature(biome, x, y, z); };
         }
-        {
+        if (config.generateStructures) {
             auto store = structure::TemplateStore::Find(config.structurePack, config.dataDir);
             structure::WorldProbe probe;
             probe.seed = static_cast<int64_t>(config.seed);

@@ -204,6 +204,7 @@ namespace perlite {
         chunks->SetStore(storage.get());
         if (storage && !levelLoaded)
             storage->SaveLevel(CurrentLevelInfo());
+        bonusPending = !levelLoaded && config.bonusChest;
 
         RegisterBuiltins();
 

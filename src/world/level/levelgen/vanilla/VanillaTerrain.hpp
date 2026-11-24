@@ -10,6 +10,7 @@
 #include "world/level/structure/Structures.hpp"
 
 namespace perlite::vanilla {
+    struct SharedFillCache;
 
     class VanillaCpuBackend final : public TerrainBackend {
     public:
@@ -61,6 +62,7 @@ namespace perlite::vanilla {
     private:
         VanillaCpuBackend() = default;
         const uint8_t* SearchFill(int chunkX, int chunkZ, const int32_t* targets) const;
+        const uint8_t* CachedFill(int chunkX, int chunkZ) const;
         std::unique_ptr<DataPack> pack;
         std::unique_ptr<DensityGraph> graph;
         DfPtr finalDensity;
@@ -71,6 +73,7 @@ namespace perlite::vanilla {
         AquiferFunctions aquifers;
         int64_t zoomSeed = 0;
         uint64_t instance = 0;
+        std::shared_ptr<SharedFillCache> sharedFills;
         std::unique_ptr<VanillaMaterials> materials;
         std::unique_ptr<VanillaCarvers> carvers;
         TerrainStages stages;

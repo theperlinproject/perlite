@@ -36,6 +36,8 @@ namespace perlite {
         int gameType = 0;
         int difficulty = 1;
         int generator = 1;
+        bool commandsEnabled = true;
+        bool generateStructures = true;
         bool raining = false;
         bool thundering = false;
         std::vector<std::pair<std::string, int>> intRules;

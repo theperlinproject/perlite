@@ -15,6 +15,13 @@ namespace perlite {
         std::string name = "Perlite Server";
         std::string motd = "A Perlite server";
         std::string levelName = "world";
+        // The world's folder under worlds/; empty = the level name with characters a path cannot hold
+        // replaced. A host that lists several worlds (Perlin's singleplayer) keeps names and folders apart.
+        std::string worldFolder;
+        // New worlds only: a chest of starting items beside the spawn point, as the game's Bonus Chest does
+        bool bonusChest = false;
+        // Villages, temples and other structures; kept in the world (level.dat) once it exists
+        bool generateStructures = true;
         std::string dataDir = ".";
         // Where the vanilla behavior pack (kept from the Bedrock Dedicated Server download) lives; empty
         // = the data folder. A host with many worlds (Perlin's singleplayer) shares one copy.

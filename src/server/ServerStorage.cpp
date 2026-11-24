@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "server/Server.hpp"
 #include "world/level/end/DragonFight.hpp"
 
@@ -20,7 +21,9 @@ namespace perlite {
             LogWarn("This build cannot save worlds (no LevelDB); the world is kept in memory only");
             return true;
         }
-        std::string name = config.levelName.empty() ? std::string("Bedrock level") : config.levelName;
+        std::string name = !config.worldFolder.empty() ? config.worldFolder
+                           : config.levelName.empty() ? std::string("Bedrock level")
+                                                      : config.levelName;
         for (char& c : name)
             if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' ||
                 c == '>' || c == '|')
@@ -37,6 +40,23 @@ namespace perlite {
         if (world->LoadLevel(info)) {
             config.seed = info.seed;
             config.randomSeed = false;
+            // What the world was made with stays with it: a flat world reopened keeps generating flat chunks.
+            if (info.generator == 2)
+                config.generator = "flat";
+            else if (config.generator == "flat")
+                config.generator = "vanilla";
+            config.generateStructures = info.generateStructures;
+            config.bonusChest = false;
+            // A world played in-process (singleplayer) also keeps its name, game mode, difficulty and cheats
+            // setting; a dedicated server's server.properties decides those, as Bedrock Dedicated Server's does.
+            if (config.loopbackOnly) {
+                if (!info.name.empty())
+                    config.levelName = info.name;
+                if (info.gameType == 0 || info.gameType == 1 || info.gameType == 2)
+                    config.gameMode = info.gameType;
+                config.difficulty = std::clamp(info.difficulty, 0, 3);
+                config.allowCheats = info.commandsEnabled;
+            }
             spawnX = info.spawnX;
             spawnY = info.spawnY;
             spawnZ = info.spawnZ;
@@ -101,6 +121,8 @@ namespace perlite {
         info.gameType = config.gameMode;
         info.difficulty = config.difficulty;
         info.generator = config.generator == "flat" ? 2 : 1;
+        info.commandsEnabled = config.allowCheats;
+        info.generateStructures = config.generateStructures;
         info.raining = raining;
         info.thundering = thundering;
         for (const auto& [rule, value] : gameRules) {

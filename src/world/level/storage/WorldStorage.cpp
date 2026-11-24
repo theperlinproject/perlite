@@ -537,7 +537,8 @@ namespace perlite {
         root.SetInt("rainTime", info.raining ? 6000 : 0);
         root.SetFloat("lightningLevel", info.thundering ? 1.0f : 0.0f);
         root.SetInt("lightningTime", info.thundering ? 6000 : 0);
-        root.SetByte("commandsEnabled", 1);
+        root.SetByte("commandsEnabled", info.commandsEnabled ? 1 : 0);
+        root.SetByte("GenerateStructures", info.generateStructures ? 1 : 0);
         root.SetString("BiomeOverride", "");
         root.SetByte("hasBeenLoadedInCreative", info.gameType == 1 ? 1 : 0);
         for (const char* key : {"lastOpenedWithVersion", "MinimumCompatibleClientVersion"}) {
@@ -582,6 +583,8 @@ namespace perlite {
         info.gameType = static_cast<int>(root.Int("GameType", info.gameType));
         info.difficulty = static_cast<int>(root.Int("Difficulty", info.difficulty));
         info.generator = static_cast<int>(root.Int("Generator", info.generator));
+        info.commandsEnabled = root.Int("commandsEnabled", 1) != 0;
+        info.generateStructures = root.Int("GenerateStructures", 1) != 0;
         info.raining = root.Real("rainLevel", 0) > 0.0;
         info.thundering = root.Real("lightningLevel", 0) > 0.0;
         for (const auto& [key, v] : root.compound) {

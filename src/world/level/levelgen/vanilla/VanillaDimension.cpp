@@ -97,7 +97,7 @@ namespace perlite::vanilla {
         b->endMidlands = BiomeIndexOf("end_midlands");
         b->endIslands = BiomeIndexOf("small_end_islands");
         b->endBarrens = BiomeIndexOf("end_barrens");
-        {
+        if (config.generateStructures) {
                 auto store = structure::TemplateStore::Find(config.structurePack, config.dataDir);
                 structure::WorldProbe probe;
                 probe.seed = static_cast<int64_t>(config.seed);

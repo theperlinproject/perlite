@@ -142,7 +142,7 @@ namespace perlite::json {
                         Skip();
                         if (i >= s.size() || s[i++] != ':')
                             return Fail("expected ':'");
-                        if (!Val(v.members[key], depth + 1))
+                        if (!Val(v.members.Append(std::move(key)), depth + 1))
                             return false;
                         Skip();
                         if (i < s.size() && s[i] == ',') {
@@ -151,6 +151,7 @@ namespace perlite::json {
                         }
                         if (i < s.size() && s[i] == '}') {
                             i++;
+                            v.members.Finish();
                             return true;
                         }
                         return Fail("expected ',' or '}'");

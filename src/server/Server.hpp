@@ -355,6 +355,9 @@ namespace perlite {
         std::unique_ptr<WorldStorage> storage;
         std::chrono::steady_clock::time_point lastSave = std::chrono::steady_clock::now();
         bool levelLoaded = false;
+        // a new world asked for a bonus chest: placed once the spawn chunk is first generated
+        bool bonusPending = false;
+        void PlaceBonusChest(ChunkPos pos, std::vector<GeneratedExtra>& extras);
         void DrainLocate();
         std::mutex locateMutex;
         std::vector<std::pair<uint64_t, std::string>> locateDone;

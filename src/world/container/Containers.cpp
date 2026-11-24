@@ -1,4 +1,5 @@
 #include "server/Server.hpp"
+#include "common/Log.hpp"
 #include "world/inventory/ItemNbt.hpp"
 
 #include "world/crafting/Recipes.hpp"
@@ -548,10 +549,14 @@ namespace perlite {
             entry->column.generatedNow = false;
             ContentOnNewChunk(dimension, pos, entry->column);
         }
-        if (entry->column.generated.empty())
-            return;
         std::vector<GeneratedExtra> extras = std::move(entry->column.generated);
         entry->column.generated.clear();
+        if (bonusPending && dimension == kOverworld && pos.x == (spawnX >> 4) && pos.z == (spawnZ >> 4)) {
+            bonusPending = false;
+            PlaceBonusChest(pos, extras);
+        }
+        if (extras.empty())
+            return;
         for (const GeneratedExtra& e : extras) {
             if (e.kind == GeneratedExtra::Loot) {
                 const int kind = ContainerKindOf(BlockRegistry::Instance().Name(BlockAt(dimension, e.x, e.y, e.z)));
@@ -592,6 +597,52 @@ namespace perlite {
                     id = "minecraft:zombie_villager_v2";
                 MobsIn(dimension).Spawn(id, e.x + 0.5, e.y, e.z + 0.5, true);
             }
+        }
+    }
+
+    // The Bonus Chest: a chest of starting items on the ground somewhere in the spawn chunk, with a torch
+    // on each open side, as the game's bonus chest feature places it. Its items roll from the vanilla
+    // chests/bonus_chest loot table when the chest is filled below.
+    void Server::PlaceBonusChest(ChunkPos pos, std::vector<GeneratedExtra>& extras) {
+        ChunkManager& world = World(kOverworld);
+        const DimensionRange range = RangeOf(kOverworld);
+        const BlockRegistry& registry = BlockRegistry::Instance();
+        const auto named = [&](uint16_t id, std::string_view part) { return registry.Name(id).contains(part); };
+        std::vector<int> columns(256);
+        for (int i = 0; i < 256; i++)
+            columns[static_cast<size_t>(i)] = i;
+        std::shuffle(columns.begin(), columns.end(), worldRng);
+        for (const int c : columns) {
+            const int x = pos.x * 16 + (c & 15), z = pos.z * 16 + (c >> 4);
+            int ground = range.minY - 1;
+            for (int y = range.MaxY(); y >= range.minY; y--) {
+                const uint16_t id = world.GetBlock(x, y, z);
+                if (id == BlockRegistry::kAir || named(id, "leaves"))
+                    continue;
+                if (named(id, "water") || named(id, "lava"))
+                    break;
+                if (BlockSolid(id)) {
+                    ground = y;
+                    break;
+                }
+            }
+            const int y = ground + 1;
+            if (ground < range.minY || y > range.MaxY() || world.GetBlock(x, y, z) != BlockRegistry::kAir)
+                continue;
+            const uint16_t chest = BlockCatalog::Instance().DefaultBlock("minecraft:chest");
+            const uint16_t torch = BlockCatalog::Instance().DefaultBlock("minecraft:torch");
+            SetBlockIn(kOverworld, x, y, z, chest);
+            static const int kSides[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            for (const auto& side : kSides) {
+                const int tx = x + side[0], tz = z + side[1];
+                if (!world.Peek({tx >> 4, tz >> 4}))
+                    continue;
+                if (world.GetBlock(tx, y, tz) == BlockRegistry::kAir && BlockSolid(world.GetBlock(tx, y - 1, tz)))
+                    SetBlockIn(kOverworld, tx, y, tz, torch);
+            }
+            extras.push_back({GeneratedExtra::Loot, x, y, z, "chests/bonus_chest"});
+            LogInfo("Bonus chest at " + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z));
+            return;
         }
     }
 

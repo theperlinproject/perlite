@@ -95,6 +95,22 @@ PERLITE_API perlite_server* perlite_create(const perlite_options* options) {
                     config.worldStorage = over["world_storage"].text;
                 if (over["level_name"].IsString())
                     config.levelName = over["level_name"].text;
+                // New-world settings from a host's world creation screen; an existing world keeps its own
+                if (over["world_folder"].IsString())
+                    config.worldFolder = over["world_folder"].text;
+                if (const int64_t d = over["difficulty"].Int(-1); d >= 0 && d <= 3)
+                    config.difficulty = static_cast<int>(d);
+                if (over["allow_cheats"].kind == json::Value::Kind::Bool)
+                    config.allowCheats = over["allow_cheats"].boolean;
+                if (over["bonus_chest"].kind == json::Value::Kind::Bool)
+                    config.bonusChest = over["bonus_chest"].boolean;
+                if (over["generate_structures"].kind == json::Value::Kind::Bool)
+                    config.generateStructures = over["generate_structures"].boolean;
+                if (over["seed_text"].IsString() && !over["seed_text"].text.empty()) {
+                    config.levelSeedText = over["seed_text"].text;
+                    config.seed = ServerConfig::SeedFromText(config.levelSeedText);
+                    config.randomSeed = false;
+                }
                 if (over["autosave_seconds"].kind == json::Value::Kind::Number)
                     config.autosaveSeconds = static_cast<uint32_t>(std::clamp<int64_t>(over["autosave_seconds"].Int(), 0, 86400));
                 if (over["seed"].kind == json::Value::Kind::Number) {
@@ -106,8 +122,12 @@ PERLITE_API perlite_server* perlite_create(const perlite_options* options) {
                 return nullptr;
             }
         }
-        if (options && options->loopback_only)
+        if (options && options->loopback_only) {
             config.loopbackOnly = true;
+            // In-process only: compressing a batch that the same process inflates again gains nothing. The
+            // NetworkSettings threshold (the protocol's own switch) keeps batches below 65535 bytes as they are.
+            config.compressionThreshold = 65535;
+        }
         auto* s = new perlite_server();
         s->server = std::make_unique<Server>(std::move(config));
         return s;

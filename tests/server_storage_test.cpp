@@ -1,3 +1,4 @@
+#include <cmath>
 #include "test_auth.hpp"
 #include "test_util.hpp"
 
@@ -256,6 +257,59 @@ int main() {
         CHECK(steve.start && std::abs(steve.start->playerPosition.x - 10.5f) < 0.01f);
         steve.Leave();
         server.Stop();
+    }
+    {
+        // A world keeps what it was made with: reopened by a host that asks for the default generator and other
+        // settings, it is still flat, and its in-process game mode, difficulty and cheats are the saved ones.
+        ServerConfig again = Config(dir);
+        again.generator = "vanilla";
+        again.gameMode = 1;
+        again.difficulty = 3;
+        again.allowCheats = true;
+        again.generateStructures = true;
+        Server server(again);
+        std::string error;
+        CHECK(server.Start(error));
+        CHECK(server.Config().generator == "flat");
+        CHECK(server.Config().gameMode == 0);
+        CHECK(server.Config().difficulty == 1);
+        CHECK(!server.Config().allowCheats);
+        server.Stop();
+    }
+    {
+        // A world folder apart from its name, with the settings of a creation screen and a bonus chest.
+        ServerConfig made = Config(dir);
+        made.levelName = "My: World";
+        made.worldFolder = "My_ World (1)";
+        made.difficulty = 3;
+        made.allowCheats = true;
+        made.generateStructures = false;
+        made.bonusChest = true;
+        made.seed = 777;
+        Server server(made);
+        std::string error;
+        CHECK(server.Start(error));
+        const int sx = static_cast<int>(std::floor(server.SpawnX())), sz = static_cast<int>(std::floor(server.SpawnZ()));
+        server.Chunks().Load({sx >> 4, sz >> 4});
+        server.Tick();
+        const uint16_t chest = BlockCatalog::Instance().DefaultBlock("minecraft:chest");
+        int chests = 0;
+        for (int x = 0; x < 16; x++)
+            for (int z = 0; z < 16; z++)
+                for (int y = -64; y < 320; y++)
+                    if (server.Chunks().GetBlock((sx & ~15) + x, y, (sz & ~15) + z) == chest)
+                        chests++;
+        CHECK(chests == 1);
+        server.Stop();
+        CHECK(fs::exists(dir / "worlds" / "My_ World (1)" / "level.dat"));
+        ServerConfig plain = Config(dir);
+        plain.worldFolder = "My_ World (1)";
+        Server reopened(plain);
+        CHECK(reopened.Start(error));
+        CHECK(reopened.Config().levelName == "My: World");
+        CHECK(reopened.Config().difficulty == 3 && reopened.Config().allowCheats);
+        CHECK(!reopened.Config().generateStructures && !reopened.Config().bonusChest);
+        reopened.Stop();
     }
     fs::remove_all(dir, ec);
     if (g_failed) {

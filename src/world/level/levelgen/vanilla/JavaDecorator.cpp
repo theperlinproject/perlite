@@ -11,9 +11,12 @@
 #include <miniz.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
+#include <deque>
 #include <map>
+#include <memory>
 #include <unordered_map>
 #include <mutex>
 #include <shared_mutex>
@@ -211,6 +214,29 @@ namespace perlite::vanilla {
         Simplex temperatureNoise{1234};
         FrozenNoise frozenNoise{3456};
         uint16_t water = 0, ice = 0, snow = 0, vine = 0, air = 0;
+
+        // What every chunk's features write, kept for its neighbours. Decorating a chunk runs the features of the
+        // nine chunks around it and keeps the writes inside it, so without this each chunk's features ran nine
+        // times. The writes depend only on that chunk's seed and the raw terrain around it (never on which
+        // neighbour asks: features stay within the chunks next to their own), so they are the same every time.
+        // Kept compactly: 8 bytes a write (local x, z, y and the block), grouped by which of the nine chunks
+        // around the origin it lands in, in write order within each group. A chunk that reads them takes its own
+        // group as is. Writes outside those nine chunks are dropped: only those chunks ever read them.
+        struct Writes {
+            std::array<uint32_t, 10> start{};
+            std::vector<uint64_t> cells;
+        };
+        static uint64_t Cell(int x, int z, int yIndex, uint16_t id) {
+            return (static_cast<uint64_t>(x & 15) << 36) | (static_cast<uint64_t>(z & 15) << 32) |
+                   (static_cast<uint64_t>(yIndex & 0xFFF) << 16) | id;
+        }
+        mutable std::mutex originMutex;
+        mutable std::unordered_map<int64_t, std::shared_ptr<const Writes>> origins;
+        mutable std::deque<int64_t> originOrder;
+        static constexpr size_t kOriginCap = 768;
+        static int64_t OriginKey(int x, int z) {
+            return (static_cast<int64_t>(x) << 32) ^ static_cast<int64_t>(static_cast<uint32_t>(z));
+        }
         mutable std::unique_ptr<std::atomic<uint8_t>[]> flags{new std::atomic<uint8_t>[65536]()};
         mutable std::vector<std::string> names;
 
@@ -302,7 +328,44 @@ namespace perlite::vanilla {
             int cx = 0, cz = 0;
             const ChunkColumn* const* region = nullptr;
             int originX = 0, originZ = 0;
-            std::unordered_map<int64_t, uint16_t> overlay;
+            // Blocks the features placed so far, in dense 16x16x16 pages over the region (kNone where nothing was
+            // placed); pages come from a per-thread pool and go back to it, so placing costs no allocation.
+            struct Overlay {
+                static constexpr int kPages = kDecorationArea * (kMaxY - kMinY + 1) / 16;
+                std::array<uint16_t*, kPages> pages{};
+                std::vector<int> used;
+                static std::vector<std::unique_ptr<uint16_t[]>>& Pool() {
+                    static thread_local std::vector<std::unique_ptr<uint16_t[]>> pool;
+                    return pool;
+                }
+                static std::vector<uint16_t*>& Free() {
+                    static thread_local std::vector<uint16_t*> free;
+                    return free;
+                }
+                bool empty() const { return used.empty(); }
+                void clear() {
+                    for (const int i : used) {
+                        Free().push_back(pages[static_cast<size_t>(i)]);
+                        pages[static_cast<size_t>(i)] = nullptr;
+                    }
+                    used.clear();
+                }
+                uint16_t* Page(int index, bool make) {
+                    uint16_t*& p = pages[static_cast<size_t>(index)];
+                    if (!p && make) {
+                        if (Free().empty()) {
+                            Pool().push_back(std::make_unique<uint16_t[]>(4096));
+                            Free().push_back(Pool().back().get());
+                        }
+                        p = Free().back();
+                        Free().pop_back();
+                        std::fill_n(p, 4096, kNone);
+                        used.push_back(index);
+                    }
+                    return p;
+                }
+                ~Overlay() { clear(); }
+            } overlay;
             std::vector<std::pair<int64_t, uint16_t>> writes;
             mutable std::array<int16_t, kDecorationArea * 256 * 3> heights;
             std::string topFeature;
@@ -325,11 +388,24 @@ namespace perlite::vanilla {
                 const ChunkColumn* c = Column(x, z);
                 return c ? c->Get(x & 15, y, z & 15) : 0;
             }
+            // The page of a block inside the region (-1 outside it) and the block's place in that page.
+            int PageOf(int x, int y, int z) const {
+                const int dx = (x >> 4) - cx, dz = (z >> 4) - cz;
+                if (dx < -kDecorationReach || dx > kDecorationReach || dz < -kDecorationReach || dz > kDecorationReach ||
+                    y < kMinY || y > kMaxY)
+                    return -1;
+                return DecorationSlot(dx, dz) * ((kMaxY - kMinY + 1) / 16) + ((y - kMinY) >> 4);
+            }
+            static int CellOf(int x, int y, int z) { return (((y - kMinY) & 15) * 16 + (z & 15)) * 16 + (x & 15); }
             uint16_t Get(const Pos& p) const {
                 if (!overlay.empty()) {
-                    const auto it = overlay.find(Key(p.x, p.y, p.z));
-                    if (it != overlay.end())
-                        return it->second;
+                    const int page = PageOf(p.x, p.y, p.z);
+                    if (page >= 0)
+                        if (const uint16_t* cells = overlay.pages[static_cast<size_t>(page)]) {
+                            const uint16_t v = cells[CellOf(p.x, p.y, p.z)];
+                            if (v != kNone)
+                                return v;
+                        }
                 }
                 return Raw(p.x, p.y, p.z);
             }
@@ -337,7 +413,7 @@ namespace perlite::vanilla {
                 if (id == kNone || p.y < kMinY || p.y > kMaxY || !Column(p.x, p.z))
                     return;
                 const int64_t k = Key(p.x, p.y, p.z);
-                overlay[k] = id;
+                overlay.Page(PageOf(p.x, p.y, p.z), true)[CellOf(p.x, p.y, p.z)] = id;
                 writes.emplace_back(k, id);
                 if (tracking) {
                     const uint8_t f = d.Flags(id);
@@ -2194,7 +2270,7 @@ namespace perlite::vanilla {
         if (!ok)
             return;
         const Impl& d = *impl;
-        std::vector<std::pair<int64_t, uint16_t>> merged;
+        std::vector<uint64_t> merged;
         World world{d};
         world.cx = chunkX;
         world.cz = chunkZ;
@@ -2206,6 +2282,20 @@ namespace perlite::vanilla {
                 if (!own)
                     continue;
                 const int originX = (chunkX + ox) * 16, originZ = (chunkZ + oz) * 16;
+                const int64_t originKey = Impl::OriginKey(chunkX + ox, chunkZ + oz);
+                std::shared_ptr<const Impl::Writes> known;
+                {
+                    std::lock_guard lock(d.originMutex);
+                    if (const auto it = d.origins.find(originKey); it != d.origins.end())
+                        known = it->second;
+                }
+                // this chunk sits at (1 - ox, 1 - oz) among the nine around that origin
+                const int group = (1 - ox) * 3 + (1 - oz);
+                if (known) {
+                    merged.insert(merged.end(), known->cells.begin() + known->start[static_cast<size_t>(group)],
+                                  known->cells.begin() + known->start[static_cast<size_t>(group) + 1]);
+                    continue;
+                }
                 world.overlay.clear();
                 world.writes.clear();
                 std::unordered_set<int> present;
@@ -2239,22 +2329,53 @@ namespace perlite::vanilla {
                         rng.SetSeed(decoration + static_cast<int64_t>(index) + 10000ll * step);
                         world.topFeature = name;
                         const bool placedOk = engine.Placed(d.doc["placed"][name], {originX, kMinY, originZ});
-                        if (std::getenv("PERLITE_DECO_DEBUG"))
+                        static const bool decoDebug = std::getenv("PERLITE_DECO_DEBUG") != nullptr;
+                        if (decoDebug)
                             std::fprintf(stderr, "deco %d,%d %s %d\n", originX >> 4, originZ >> 4, name.c_str(), placedOk ? 1 : 0);
                     }
                 }
-                for (const auto& [key, id] : world.writes) {
-                    const int x = static_cast<int>(key >> 38);
-                    const int z = static_cast<int>((key << 26) >> 38);
-                    if ((x >> 4) == chunkX && (z >> 4) == chunkZ)
-                        merged.emplace_back(key, id);
+                auto packed = std::make_shared<Impl::Writes>();
+                {
+                    const int firstX = (chunkX + ox) - 1, firstZ = (chunkZ + oz) - 1;
+                    const auto groupOf = [&](int64_t key) {
+                        const int gx = (static_cast<int>(key >> 38) >> 4) - firstX;
+                        const int gz = (static_cast<int>((key << 26) >> 38) >> 4) - firstZ;
+                        return gx >= 0 && gx < 3 && gz >= 0 && gz < 3 ? gx * 3 + gz : -1;
+                    };
+                    std::array<uint32_t, 9> count{};
+                    for (const auto& [key, id] : world.writes)
+                        if (const int g = groupOf(key); g >= 0)
+                            count[static_cast<size_t>(g)]++;
+                    for (size_t g = 0; g < 9; g++)
+                        packed->start[g + 1] = packed->start[g] + count[g];
+                    packed->cells.resize(packed->start[9]);
+                    std::array<uint32_t, 9> at{};
+                    for (size_t g = 0; g < 9; g++)
+                        at[g] = packed->start[g];
+                    for (const auto& [key, id] : world.writes)
+                        if (const int g = groupOf(key); g >= 0)
+                            packed->cells[at[static_cast<size_t>(g)]++] =
+                                Impl::Cell(static_cast<int>(key >> 38), static_cast<int>((key << 26) >> 38),
+                                           static_cast<int>(key & 0xFFF), id);
+                }
+                merged.insert(merged.end(), packed->cells.begin() + packed->start[static_cast<size_t>(group)],
+                              packed->cells.begin() + packed->start[static_cast<size_t>(group) + 1]);
+                {
+                    std::shared_ptr<const Impl::Writes> kept = std::move(packed);
+                    std::lock_guard lock(d.originMutex);
+                    if (d.origins.emplace(originKey, std::move(kept)).second) {
+                        d.originOrder.push_back(originKey);
+                        while (d.originOrder.size() > Impl::kOriginCap) {
+                            d.origins.erase(d.originOrder.front());
+                            d.originOrder.pop_front();
+                        }
+                    }
                 }
             }
-        for (const auto& [key, id] : merged) {
-            const int x = static_cast<int>(key >> 38);
-            const int z = static_cast<int>((key << 26) >> 38);
-            const int y = static_cast<int>(key & 0xFFF) + kMinY;
-            out.Set(x & 15, y, z & 15, id);
+        for (const uint64_t cell : merged) {
+            const int x = static_cast<int>((cell >> 36) & 15), z = static_cast<int>((cell >> 32) & 15);
+            const int y = static_cast<int>((cell >> 16) & 0xFFF) + kMinY;
+            out.Set(x, y, z, static_cast<uint16_t>(cell & 0xFFFF));
         }
         for (int x = 0; x < 16; x++)
             for (int z = 0; z < 16; z++) {
