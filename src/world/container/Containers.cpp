@@ -1,3 +1,4 @@
+#include "server/VanillaPack.hpp"
 #include "server/Server.hpp"
 #include "common/Log.hpp"
 #include "world/inventory/ItemNbt.hpp"
@@ -520,13 +521,22 @@ namespace perlite {
         bool EnsureLootTable(const ServerConfig& config, const std::string& key) {
             if (LootTables::Instance().Has(key))
                 return true;
-            static const std::string root = [&] {
-                const auto store = structure::TemplateStore::Find(config.structurePack, config.dataDir);
-                return store ? std::filesystem::path(store->Directory()).parent_path().string() : std::string();
+            // Loot tables come from the structure pack when one is installed, else from the vanilla behavior pack.
+            static const std::vector<std::string> roots = [&] {
+                std::vector<std::string> out;
+                if (const auto store = structure::TemplateStore::Find(config.structurePack, config.dataDir))
+                    out.push_back(std::filesystem::path(store->Directory()).parent_path().string());
+                const std::string vanilla = vanillapack::Ensure(config.vanillaPackDir.empty() ? config.dataDir : config.vanillaPackDir, false);
+                if (!vanilla.empty())
+                    out.push_back(vanilla);
+                return out;
             }();
-            if (root.empty())
-                return false;
-            std::ifstream in(std::filesystem::path(root) / "loot_tables" / (key + ".json"));
+            std::ifstream in;
+            for (const std::string& root : roots) {
+                in = std::ifstream(std::filesystem::path(root) / "loot_tables" / (key + ".json"));
+                if (in)
+                    break;
+            }
             if (!in)
                 return false;
             std::stringstream text;
@@ -551,6 +561,7 @@ namespace perlite {
         }
         std::vector<GeneratedExtra> extras = std::move(entry->column.generated);
         entry->column.generated.clear();
+        SettleSpawn(dimension, pos);
         if (bonusPending && dimension == kOverworld && pos.x == (spawnX >> 4) && pos.z == (spawnZ >> 4)) {
             bonusPending = false;
             PlaceBonusChest(pos, extras);
@@ -602,7 +613,7 @@ namespace perlite {
 
     // The Bonus Chest: a chest of starting items on the ground somewhere in the spawn chunk, with a torch
     // on each open side, as the game's bonus chest feature places it. Its items roll from the vanilla
-    // chests/bonus_chest loot table when the chest is filled below.
+    // chests/spawn_bonus_chest loot table when the chest is filled below.
     void Server::PlaceBonusChest(ChunkPos pos, std::vector<GeneratedExtra>& extras) {
         ChunkManager& world = World(kOverworld);
         const DimensionRange range = RangeOf(kOverworld);
@@ -640,7 +651,7 @@ namespace perlite {
                 if (world.GetBlock(tx, y, tz) == BlockRegistry::kAir && BlockSolid(world.GetBlock(tx, y - 1, tz)))
                     SetBlockIn(kOverworld, tx, y, tz, torch);
             }
-            extras.push_back({GeneratedExtra::Loot, x, y, z, "chests/bonus_chest"});
+            extras.push_back({GeneratedExtra::Loot, x, y, z, "chests/spawn_bonus_chest"});
             LogInfo("Bonus chest at " + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z));
             return;
         }

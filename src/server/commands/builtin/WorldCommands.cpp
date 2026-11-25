@@ -6,9 +6,13 @@ namespace perlite {
         [[maybe_unused]] const auto& fail = r.fail;
         const auto& add = r.add;
         add({"difficulty"}, "Show or set the difficulty", true,
-            {"", "<difficulty:enum(peaceful|easy|normal|hard)>"}, [this, say](CommandCtx& c) {
+            {"", "<difficulty:enum(peaceful|easy|normal|hard)>"}, [this, say, fail](CommandCtx& c) {
                 if (!c.Has("difficulty")) {
                     say(c.source, std::string("The difficulty is ") + DifficultyName(config.difficulty));
+                    return;
+                }
+                if (config.hardcore) {
+                    fail(c.source, "The difficulty of a hardcore world is always hard");
                     return;
                 }
                 const std::string d = c["difficulty"].text;
@@ -24,6 +28,8 @@ namespace perlite {
                 if (c.overload == 0) {
                     config.allowCheats = c["value"].text == "true";
                     say(c.source, "allow-cheats is now " + c["value"].text);
+                } else if (config.hardcore) {
+                    say(c.source, "§cThe difficulty of a hardcore world is always hard");
                 } else {
                     const std::string d = c["value"].text;
                     config.difficulty = d == "peaceful" ? 0 : d == "easy" ? 1 : d == "normal" ? 2 : 3;
@@ -364,12 +370,48 @@ namespace perlite {
 
         add({"locate"}, "Find the nearest biome or structure", true,
             {"biome <biome:biome>", "structure <structure:string>"}, [this, say, fail](CommandCtx& c) {
+                TerrainBackend& backend = World(CommandDimension(c.source)).Backend();
                 if (c.overload == 1) {
-                    fail(c.source, "Could not find a structure of type \"" + c["structure"].text +
-                                       "\": this server does not generate structures yet");
+                    const uint64_t id = c.source ? c.source->Id() : 0;
+                    if (locating.contains(id)) {
+                        fail(c.source, "A search is already running; it answers when it is done");
+                        return;
+                    }
+                    if (!config.generateStructures) {
+                        fail(c.source, "Could not find a structure of type \"" + c["structure"].text +
+                                           "\": structures are turned off in this world");
+                        return;
+                    }
+                    locating.insert(id);
+                    const CommandOrigin* origin = ActiveOrigin();
+                    const int fromX = static_cast<int>(std::floor(origin ? origin->x : c.source ? c.source->X() : SpawnX()));
+                    const int fromZ = static_cast<int>(std::floor(origin ? origin->z : c.source ? c.source->Z() : SpawnZ()));
+                    std::string name = c["structure"].text;
+                    say(c.source, "Searching for " + name + " ...");
+                    locateThreads.emplace_back([this, &backend, id, name, fromX, fromZ] {
+                        int x = 0, z = 0;
+                        bool available = true;
+                        const bool found = backend.LocateStructure(name, fromX, fromZ, 400, x, z, available);
+                        if (locateCancel)
+                            return;
+                        std::string text;
+                        if (found) {
+                            const int distance = static_cast<int>(std::lround(
+                                std::hypot(static_cast<double>(x - fromX), static_cast<double>(z - fromZ))));
+                            text = "The nearest " + name + " is at [" + std::to_string(x) + ", ~, " + std::to_string(z) +
+                                   "] (" + std::to_string(distance) + " blocks away)";
+                        } else if (!available) {
+                            text = "§cCould not find a structure of type \"" + name +
+                                   "\": this world's generator places no structures (the structure templates come "
+                                   "from the vanilla behavior pack, which is not installed)";
+                        } else {
+                            text = "§cCould not find a structure of type \"" + name + "\" within 6400 blocks";
+                        }
+                        std::lock_guard<std::mutex> lock(locateMutex);
+                        locateDone.emplace_back(id, std::move(text));
+                    });
                     return;
                 }
-                TerrainBackend& backend = World(CommandDimension(c.source)).Backend();
                 if (!backend.HasBiomes()) {
                     fail(c.source, "This world has no biomes to locate (it is a flat world)");
                     return;

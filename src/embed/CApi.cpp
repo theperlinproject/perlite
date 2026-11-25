@@ -104,6 +104,12 @@ PERLITE_API perlite_server* perlite_create(const perlite_options* options) {
                     config.allowCheats = over["allow_cheats"].boolean;
                 if (over["bonus_chest"].kind == json::Value::Kind::Bool)
                     config.bonusChest = over["bonus_chest"].boolean;
+                if (over["flat_layers"].IsString())
+                    config.SetProperty("perlite-flat-layers", over["flat_layers"].text);
+                if (over["hardcore"].kind == json::Value::Kind::Bool)
+                    config.hardcore = over["hardcore"].boolean;
+                if (config.hardcore)
+                    config.difficulty = 3;
                 if (over["generate_structures"].kind == json::Value::Kind::Bool)
                     config.generateStructures = over["generate_structures"].boolean;
                 if (over["seed_text"].IsString() && !over["seed_text"].text.empty()) {

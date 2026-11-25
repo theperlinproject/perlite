@@ -37,6 +37,8 @@ namespace perlite {
         int difficulty = 1;
         int generator = 1;
         bool commandsEnabled = true;
+        bool hardcore = false;
+        std::string flatLayers; // "minecraft:bedrock*1,minecraft:dirt*2,..." bottom up; empty when not flat
         bool generateStructures = true;
         bool raining = false;
         bool thundering = false;

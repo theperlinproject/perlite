@@ -50,6 +50,21 @@ namespace perlite {
             return false;
         }
 
+        // The nearest start of a structure type ("village", "minecraft:ruined_portal", ...) within `radius`
+        // chunks, as a block position. Returns false when none is found; `available` is false when this
+        // backend places no structures at all.
+        virtual bool LocateStructure(const std::string& type, int fromX, int fromZ, int radius, int& x, int& z,
+                                     bool& available) {
+            (void)type;
+            (void)fromX;
+            (void)fromZ;
+            (void)radius;
+            (void)x;
+            (void)z;
+            available = false;
+            return false;
+        }
+
         virtual bool HasBiomes() const { return false; }
         virtual bool Decorates() const { return false; }
         virtual const json::Value* Spawns(int tableIndex) const {

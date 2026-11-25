@@ -141,6 +141,10 @@ namespace perlite {
                             "data/bedrock folder");
                 }
             }
+            // Shields carry an extra field in every item stack, so the id must be known before any item
+            // packet (creative list, recipes) is encoded; clients that know it read that field.
+            if (const CatalogItem* shield = catalog.ItemByName("minecraft:shield"))
+                net::context::SetShieldItemID(shield->networkId);
             BuildItemPackets();
             // Mob sizes, scale, health and speed, the block shapes, recipes, structures and loot
             // come from Mojang's vanilla behavior pack, kept from the Bedrock Dedicated Server
@@ -172,8 +176,6 @@ namespace perlite {
                     LogWarn("No structure templates: villages, bastions and other template structures will not generate");
             }
             Recipes::Instance().Load();
-            if (const CatalogItem* shield = catalog.ItemByName("minecraft:shield"))
-                net::context::SetShieldItemID(shield->networkId);
         }
         BackendChoice choice = CreateTerrainBackend(config);
         if (!choice.backend) {
@@ -205,6 +207,7 @@ namespace perlite {
         if (storage && !levelLoaded)
             storage->SaveLevel(CurrentLevelInfo());
         bonusPending = !levelLoaded && config.bonusChest;
+        spawnSettlePending = !levelLoaded;
 
         RegisterBuiltins();
 
@@ -1129,6 +1132,62 @@ namespace perlite {
         return true;
     }
 
+    void Server::SettleSpawn(int dimension, ChunkPos pos) {
+        if (!spawnSettlePending || dimension != kOverworld || pos.x != (spawnX >> 4) || pos.z != (spawnZ >> 4))
+            return;
+        spawnSettlePending = false;
+        // The top block of a column, or kMinY - 1 for an empty (or not loaded) one.
+        const auto topOf = [&](int x, int z) {
+            for (int y = kMinY + kHeight - 1; y >= kMinY; y--)
+                if (BlockAt(dimension, x, y, z) != BlockRegistry::kAir)
+                    return y;
+            return kMinY - 1;
+        };
+        // Players start on the ground, not on a tree or in water: the nearest such column of the chunk.
+        const auto ground = [&](int x, int z, int y) {
+            const std::string& name = BlockRegistry::Instance().Name(BlockAt(dimension, x, y, z));
+            for (const char* bad : {"leaves", "_log", "_wood", "water", "lava", "vine", "bamboo", "cactus", "mushroom_block"})
+                if (name.find(bad) != std::string::npos)
+                    return false;
+            return true;
+        };
+        const int baseX = spawnX & ~15, baseZ = spawnZ & ~15;
+        int bestX = spawnX, bestZ = spawnZ, best = -1, bestDistance = 1 << 30;
+        for (int x = baseX; x < baseX + 16; x++)
+            for (int z = baseZ; z < baseZ + 16; z++) {
+                const int t = topOf(x, z);
+                const int d = (x - spawnX) * (x - spawnX) + (z - spawnZ) * (z - spawnZ);
+                if (t >= kMinY && ground(x, z, t) && d < bestDistance) {
+                    bestDistance = d;
+                    bestX = x;
+                    bestZ = z;
+                    best = t;
+                }
+            }
+        const int top = best >= kMinY ? best : topOf(spawnX, spawnZ);
+        // A void world (no blocks at all) keeps its spawn.
+        if (top < kMinY || (top + 1 == spawnY && bestX == spawnX && bestZ == spawnZ))
+            return;
+        const int oldX = spawnX, oldZ = spawnZ;
+        if (best >= kMinY) {
+            spawnX = bestX;
+            spawnZ = bestZ;
+        }
+        const int oldY = spawnY;
+        spawnY = top + 1;
+        LogInfo("World spawn settled at " + std::to_string(spawnX) + ", " + std::to_string(spawnY) + ", " +
+                std::to_string(spawnZ));
+        if (storage)
+            storage->SaveLevel(CurrentLevelInfo());
+        // Players already placed at the old spawn move onto the ground.
+        for (Session* s : PlayersIn(kOverworld)) {
+            const double feet = s->Y() - 1.62;
+            if (std::abs(s->X() - (oldX + 0.5)) < 2.0 && std::abs(s->Z() - (oldZ + 0.5)) < 2.0 &&
+                std::abs(feet - oldY) < 4.0)
+                s->Teleport(spawnX + 0.5, spawnY + 1.62, spawnZ + 0.5);
+        }
+    }
+
     bool Server::Teleport(uint64_t player, double x, double y, double z) {
         Session* s = FindSession(player);
         if (!s || !s->InGame())
@@ -1544,7 +1603,11 @@ namespace perlite {
             legacy.networkId = item.networkId;
             legacy.count = 1;
             legacy.blockRuntimeId = item.block ? item.blockHash : 0;
-            legacy.extra = proto2225::ItemExtraDataWithoutBlockingTick{};
+            // The shield's extra data carries its blocking tick; every other item's does not.
+            if (legacy.networkId == net::context::ShieldItemID())
+                legacy.extra = proto2225::ItemExtraDataWithBlockingTick{};
+            else
+                legacy.extra = proto2225::ItemExtraDataWithoutBlockingTick{};
             size_t group = defs.size();
             const std::string shortName = item.name.substr(item.name.find(':') + 1);
             if (!item.block) {

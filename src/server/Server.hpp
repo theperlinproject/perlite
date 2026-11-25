@@ -357,6 +357,10 @@ namespace perlite {
         bool levelLoaded = false;
         // a new world asked for a bonus chest: placed once the spawn chunk is first generated
         bool bonusPending = false;
+        // A new world's spawn height comes from the terrain noise; it is settled on the real top block
+        // (trees, overhangs and structures included) once the spawn chunk has generated.
+        bool spawnSettlePending = false;
+        void SettleSpawn(int dimension, ChunkPos pos);
         void PlaceBonusChest(ChunkPos pos, std::vector<GeneratedExtra>& extras);
         void DrainLocate();
         std::mutex locateMutex;

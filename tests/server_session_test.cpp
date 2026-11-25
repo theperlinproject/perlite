@@ -15,6 +15,7 @@
 #include "world/level/block/Blocks.hpp"
 #include "support/ChunkCodec.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <random>
@@ -857,7 +858,15 @@ int main(int argc, char** argv) {
                       proto::AvailableCommandsPacketCommandDataEntryOverloadsEntryParametersEntryEnumType::
                           Enum);
                 const size_t index = static_cast<size_t>(first.valueType);
-                CHECK(index < packet.enums.size() && packet.enums[index].values.size() == 4);
+                // The four modes, and the short forms the game also takes (s, c, a, 0, 1, 2...).
+                CHECK(index < packet.enums.size() && packet.enums[index].values.size() >= 4);
+                if (index < packet.enums.size()) {
+                    std::vector<std::string> values;
+                    for (const auto& v : packet.enums[index].values)
+                        values.push_back(packet.enumValues.size() > static_cast<size_t>(v) ? packet.enumValues[static_cast<size_t>(v)] : std::string());
+                    for (const char* mode : {"survival", "creative", "adventure", "spectator"})
+                        CHECK(std::find(values.begin(), values.end(), mode) != values.end());
+                }
             }
             CHECK(!packet.dynamicEnums.empty());
         }

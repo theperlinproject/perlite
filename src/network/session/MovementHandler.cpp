@@ -19,9 +19,12 @@ namespace perlite {
             fallDistance = 0;
             invulnerable = 60;
             dataDirty = true;
-            posX = (hasSpawnPoint ? spawnPointX : server.SpawnX()) + 0.5;
-            posY = (hasSpawnPoint ? spawnPointY : server.SpawnY()) + 1.62;
-            posZ = (hasSpawnPoint ? spawnPointZ : server.SpawnZ()) + 0.5;
+            // Hardcore has one life: the player stays where they died and watches as a spectator.
+            if (!server.Config().hardcore) {
+                posX = (hasSpawnPoint ? spawnPointX : server.SpawnX()) + 0.5;
+                posY = (hasSpawnPoint ? spawnPointY : server.SpawnY()) + 1.62;
+                posZ = (hasSpawnPoint ? spawnPointZ : server.SpawnZ()) + 0.5;
+            }
             SendAttributes();
         }
         proto::RespawnPacket reply;
@@ -29,6 +32,11 @@ namespace perlite {
         reply.state = 1;
         reply.runtimeEntityId = runtimeId;
         Send(reply);
+        if (wasDead && server.Config().hardcore) {
+            SetGameMode(6);
+            server.HookPlayerRespawn(*this);
+            return;
+        }
         if (wasDead && dimension != kOverworld)
             server.ChangeDimension(*this, kOverworld, posX, posY, posZ);
         else if (wasDead)

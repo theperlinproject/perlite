@@ -272,6 +272,7 @@ namespace perlite {
         g.generator = cfg.generator == "vanilla" ? 1 : 2;
         g.worldGamemode = static_cast<proto::GameMode>(cfg.gameMode);
         g.difficulty = cfg.difficulty;
+        g.hardcore = cfg.hardcore;
         g.spawnPosition = {static_cast<int32_t>(std::floor(server.SpawnX())),
                            static_cast<int32_t>(std::floor(server.SpawnY())),
                            static_cast<int32_t>(std::floor(server.SpawnZ()))};

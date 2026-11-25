@@ -1,5 +1,6 @@
 #include "world/level/storage/WorldStorage.hpp"
 
+#include "common/Json.hpp"
 #include "common/Log.hpp"
 #include "world/level/block/Blocks.hpp"
 #include "world/level/levelgen/vanilla/VanillaSurface.hpp"
@@ -14,6 +15,38 @@
 #include <unordered_map>
 
 namespace perlite {
+    namespace {
+        std::vector<std::string> SplitLayers(const std::string& text) {
+            std::vector<std::string> out;
+            size_t start = 0;
+            while (start <= text.size()) {
+                const size_t comma = text.find(',', start);
+                std::string item = text.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+                if (!item.empty())
+                    out.push_back(std::move(item));
+                if (comma == std::string::npos)
+                    break;
+                start = comma + 1;
+            }
+            return out;
+        }
+
+        // "block*count,..." from the game's FlatWorldLayers JSON.
+        std::string FlatLayersText(const std::string& jsonText) {
+            json::Value doc;
+            if (jsonText.empty() || !json::Parse(jsonText, doc))
+                return {};
+            std::string out;
+            for (const json::Value& l : doc["block_layers"].items) {
+                const std::string block = l["block_name"].String();
+                if (block.empty())
+                    continue;
+                out += (out.empty() ? "" : ",") + block + "*" + std::to_string(std::max<int64_t>(1, l["count"].Int(1)));
+            }
+            return out;
+        }
+    }
+
     namespace fs = std::filesystem;
 
     namespace {
@@ -538,6 +571,21 @@ namespace perlite {
         root.SetFloat("lightningLevel", info.thundering ? 1.0f : 0.0f);
         root.SetInt("lightningTime", info.thundering ? 6000 : 0);
         root.SetByte("commandsEnabled", info.commandsEnabled ? 1 : 0);
+        root.SetByte("IsHardcore", info.hardcore ? 1 : 0);
+        if (!info.flatLayers.empty()) {
+            // The game's own form: a JSON text of the layers, bottom up.
+            std::string text = "{\"biome_id\":1,\"block_layers\":[";
+            bool first = true;
+            for (const std::string& item : SplitLayers(info.flatLayers)) {
+                const size_t star = item.find('*');
+                const std::string block = item.substr(0, star);
+                const std::string count = star == std::string::npos ? "1" : item.substr(star + 1);
+                text += std::string(first ? "" : ",") + "{\"block_name\":\"" + block + "\",\"count\":" + count + "}";
+                first = false;
+            }
+            text += "],\"encoding_version\":6,\"structure_options\":null,\"world_version\":\"version.post_1_18\"}\n";
+            root.SetString("FlatWorldLayers", text);
+        }
         root.SetByte("GenerateStructures", info.generateStructures ? 1 : 0);
         root.SetString("BiomeOverride", "");
         root.SetByte("hasBeenLoadedInCreative", info.gameType == 1 ? 1 : 0);
@@ -584,13 +632,15 @@ namespace perlite {
         info.difficulty = static_cast<int>(root.Int("Difficulty", info.difficulty));
         info.generator = static_cast<int>(root.Int("Generator", info.generator));
         info.commandsEnabled = root.Int("commandsEnabled", 1) != 0;
+        info.hardcore = root.Int("IsHardcore", 0) != 0;
+        info.flatLayers = FlatLayersText(root.String("FlatWorldLayers", ""));
         info.generateStructures = root.Int("GenerateStructures", 1) != 0;
         info.raining = root.Real("rainLevel", 0) > 0.0;
         info.thundering = root.Real("lightningLevel", 0) > 0.0;
         for (const auto& [key, v] : root.compound) {
             if (key.empty() || !std::islower(static_cast<unsigned char>(key[0])))
                 continue;
-            if (key == "currentTick" || key == "commandsEnabled" || key == "lastOpenedWithVersion" ||
+            if (key == "currentTick" || key == "commandsEnabled" || key == "IsHardcore" || key == "lastOpenedWithVersion" ||
                 key == "rainLevel" || key == "rainTime" || key == "lightningLevel" ||
                 key == "lightningTime" || key == "hasBeenLoadedInCreative")
                 continue;

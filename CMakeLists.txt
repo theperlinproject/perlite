@@ -131,6 +131,19 @@ set(PERLITE_SOURCES
     src/world/level/chunk/ChunkManager.cpp
     src/world/level/levelgen/Backends.cpp
     src/world/level/levelgen/Generator.cpp
+    src/world/level/levelgen/bedrock/BiomeTable.cpp
+    src/world/level/levelgen/bedrock/BiomeTree.cpp
+    src/world/level/levelgen/bedrock/BiomeVolume.cpp
+    src/world/level/levelgen/bedrock/Carvers.cpp
+    src/world/level/levelgen/bedrock/Pack.cpp
+    src/world/level/levelgen/bedrock/Surface.cpp
+    src/world/level/levelgen/bedrock/Fill.cpp
+    src/world/level/levelgen/bedrock/Overworld.cpp
+    src/world/level/levelgen/bedrock/OverworldNoise.cpp
+    src/world/level/levelgen/bedrock/Random.cpp
+    src/world/level/levelgen/bedrock/Spawn.cpp
+    src/world/level/levelgen/bedrock/Spline.cpp
+    src/world/level/levelgen/bedrock/Terrain.cpp
     src/world/level/levelgen/vanilla/BiomeData.cpp
     src/world/level/levelgen/vanilla/DataPack.cpp
     src/world/level/levelgen/vanilla/DensityFunction.cpp
@@ -222,6 +235,8 @@ if(NOT MSVC)
         src/world/level/levelgen/vanilla/VanillaMaterials.cpp
         src/world/level/levelgen/vanilla/VanillaCarvers.cpp
         src/world/level/levelgen/vanilla/VanillaDimension.cpp)
+    file(GLOB PERLITE_BEDROCK_GEN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/world/level/levelgen/bedrock/*.cpp")
+    list(APPEND PERLITE_STRICT_FP ${PERLITE_BEDROCK_GEN_SOURCES})
     set_source_files_properties(${PERLITE_STRICT_FP} TARGET_DIRECTORY perlite_objects PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 
@@ -259,9 +274,26 @@ if(PERLITE_BUILD_EXE)
     install(DIRECTORY "${PERLITE_BEDROCK_DIR}/" DESTINATION data/bedrock)
 endif()
 
+# The macOS, iOS, Android, FreeBSD and web builds use libc++, which lacks some C++20/23 library
+# features that libstdc++ and MSVC have; stop at configure time on every platform instead of
+# failing the compile on only some of them.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_FOUND)
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_portability.py ${CMAKE_CURRENT_SOURCE_DIR}
+        RESULT_VARIABLE PERLITE_PORTABILITY_RESULT
+        OUTPUT_VARIABLE PERLITE_PORTABILITY_OUTPUT)
+    if(NOT PERLITE_PORTABILITY_RESULT EQUAL 0)
+        message(FATAL_ERROR "Non-portable standard library use:\n${PERLITE_PORTABILITY_OUTPUT}")
+    endif()
+endif()
+
 if(PERLITE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+    if(Python3_FOUND)
+        add_test(NAME libcxx_portability COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_portability.py ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_FOUND AND COMMAND perlin_api_add_checks)
         perlin_api_add_checks(SERVER "${CMAKE_CURRENT_SOURCE_DIR}/src")

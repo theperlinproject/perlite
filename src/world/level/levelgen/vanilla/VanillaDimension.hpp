@@ -21,6 +21,11 @@ namespace perlite::vanilla {
         void Generate(std::span<const ChunkPos> positions, std::span<ChunkColumn> out) override;
         size_t PreferredBatch() const override { return 1; }
         bool ThreadSafe() const override { return true; }
+        bool LocateStructure(const std::string& type, int fromX, int fromZ, int radius, int& x, int& z,
+                             bool& available) override {
+            available = structures != nullptr;
+            return structures && structures->Locate(type, fromX, fromZ, radius, x, z);
+        }
         bool HasBiomes() const override { return true; }
         // The End decorates its chunks (pillars, chorus, islands); the nether its features.
         bool Decorates() const override { return true; }

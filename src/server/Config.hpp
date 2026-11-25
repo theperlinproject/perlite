@@ -20,6 +20,7 @@ namespace perlite {
         std::string worldFolder;
         // New worlds only: a chest of starting items beside the spawn point, as the game's Bonus Chest does
         bool bonusChest = false;
+        bool hardcore = false; // one life: difficulty stays hard and a dead player becomes a spectator
         // Villages, temples and other structures; kept in the world (level.dat) once it exists
         bool generateStructures = true;
         std::string dataDir = ".";

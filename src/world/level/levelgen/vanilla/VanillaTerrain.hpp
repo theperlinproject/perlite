@@ -24,6 +24,11 @@ namespace perlite::vanilla {
         bool FindSpawn(int& x, int& y, int& z) override;
         bool LocateBiome(int biome, int fromX, int fromZ, int radius, const std::atomic<bool>& cancel, int& x,
                          int& y, int& z) override;
+        bool LocateStructure(const std::string& type, int fromX, int fromZ, int radius, int& x, int& z,
+                             bool& available) override {
+            available = structures != nullptr;
+            return structures && structures->Locate(type, fromX, fromZ, radius, x, z);
+        }
         bool HasBiomes() const override { return true; }
         bool Decorates() const override { return decorator && decorator->Ok(); }
         void Decorate(ChunkPos pos, const ChunkColumn* const region[], ChunkColumn& out) const override {

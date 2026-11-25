@@ -2,6 +2,21 @@
 #include "world/actor/mob/MobRegistry.hpp"
 
 namespace perlite {
+    namespace {
+        // The game's short forms of the game modes: s, c, a, sp and 0, 1, 2.
+        std::string GameModeWord(const std::string& m) {
+            if (m == "s" || m == "0")
+                return "survival";
+            if (m == "c" || m == "1")
+                return "creative";
+            if (m == "a" || m == "2")
+                return "adventure";
+            if (m == "sp")
+                return "spectator";
+            return m;
+        }
+    }
+
     void Server::RegisterPlayerCommands(const CommandRegistrar& r) {
         const auto& say = r.say;
         [[maybe_unused]] const auto& fail = r.fail;
@@ -72,8 +87,8 @@ namespace perlite {
                     say(c.source, SetOperator(n, false));
             });
         add({"gamemode"}, "Set a player's game mode", true,
-            {"<mode:enum(survival|creative|adventure|spectator)> [target:targets]"}, [say](CommandCtx& c) {
-                const std::string m = c["mode"].text;
+            {"<mode:enum(survival|creative|adventure|spectator|s|c|a|sp|0|1|2)> [target:targets]"}, [say](CommandCtx& c) {
+                const std::string m = GameModeWord(c["mode"].text);
                 const int value = m == "survival" ? 0 : m == "creative" ? 1 : m == "adventure" ? 2 : 6;
                 std::vector<Session*> list = c.Has("target") ? c["target"].players : std::vector<Session*>{};
                 if (!c.Has("target")) {
@@ -93,8 +108,8 @@ namespace perlite {
                 }
             });
         add({"defaultgamemode"}, "Set the game mode new players start in", true,
-            {"<mode:enum(survival|creative|adventure|spectator)>"}, [this, say](CommandCtx& c) {
-                const std::string m = c["mode"].text;
+            {"<mode:enum(survival|creative|adventure|spectator|s|c|a|sp|0|1|2)>"}, [this, say](CommandCtx& c) {
+                const std::string m = GameModeWord(c["mode"].text);
                 config.gameMode = m == "survival" ? 0 : m == "creative" ? 1 : m == "adventure" ? 2 : 6;
                 say(c.source, std::string("The default game mode is now ") + ModeName(config.gameMode));
             });

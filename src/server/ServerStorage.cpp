@@ -46,6 +46,10 @@ namespace perlite {
             else if (config.generator == "flat")
                 config.generator = "vanilla";
             config.generateStructures = info.generateStructures;
+            // Hardcore is chosen when a world is made and stays with it, on dedicated servers too.
+            config.hardcore = info.hardcore;
+            if (!info.flatLayers.empty())
+                config.SetProperty("perlite-flat-layers", info.flatLayers);
             config.bonusChest = false;
             // A world played in-process (singleplayer) also keeps its name, game mode, difficulty and cheats
             // setting; a dedicated server's server.properties decides those, as Bedrock Dedicated Server's does.
@@ -57,6 +61,8 @@ namespace perlite {
                 config.difficulty = std::clamp(info.difficulty, 0, 3);
                 config.allowCheats = info.commandsEnabled;
             }
+            if (config.hardcore)
+                config.difficulty = 3;
             spawnX = info.spawnX;
             spawnY = info.spawnY;
             spawnZ = info.spawnZ;
@@ -122,6 +128,11 @@ namespace perlite {
         info.difficulty = config.difficulty;
         info.generator = config.generator == "flat" ? 2 : 1;
         info.commandsEnabled = config.allowCheats;
+        info.hardcore = config.hardcore;
+        if (config.generator == "flat") {
+            for (const FlatLayer& l : config.flatLayers)
+                info.flatLayers += (info.flatLayers.empty() ? "" : ",") + l.block + "*" + std::to_string(l.count);
+        }
         info.generateStructures = config.generateStructures;
         info.raining = raining;
         info.thundering = thundering;
