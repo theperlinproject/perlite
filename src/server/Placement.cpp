@@ -179,7 +179,9 @@ namespace perlite {
             int facing = Opposite(look);
             if (bare.contains("anvil"))
                 facing = Clockwise(look);
-            else if (bare.ends_with("door") || bare.ends_with("fence_gate") || bare.ends_with("campfire"))
+            else if (bare.ends_with("door") && !bare.ends_with("trapdoor"))
+                facing = Clockwise(look); // a door's cardinal direction is a quarter turn clockwise of the way it faces
+            else if (bare.ends_with("fence_gate") || bare.ends_with("campfire"))
                 facing = look;
             Put(states, "minecraft:cardinal_direction", std::string(kFaceName[facing]));
         }
@@ -227,6 +229,11 @@ namespace perlite {
         if (Has(states, "torch_facing_direction")) {
             static const char* const kTorch[6] = {"top", "top", "south", "north", "east", "west"};
             Put(states, "torch_facing_direction", std::string(kTorch[face]));
+        }
+        if (Has(states, "vine_direction_bits")) {
+            // The side the vine hangs on: the block it was placed against (1 south, 2 west, 4 north, 8 east).
+            static const int32_t kVineSide[6] = {0, 0, 1, 4, 8, 2};
+            Put(states, "vine_direction_bits", kVineSide[face]);
         }
         if (Has(states, "ground_sign_direction"))
             Put(states, "ground_sign_direction",
@@ -337,7 +344,7 @@ namespace perlite {
                                      itemBlock.ends_with("torch") || itemBlock == "minecraft:ladder")) {
             return reject();
         }
-        if (face == kUp && Bare(itemBlock) == "ladder")
+        if (face == kUp && (Bare(itemBlock) == "ladder" || Bare(itemBlock) == "vine"))
             return reject();
 
         int extraFace = -1;

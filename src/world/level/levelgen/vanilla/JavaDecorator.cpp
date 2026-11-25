@@ -2064,7 +2064,8 @@ namespace perlite::vanilla {
 
             void Decorator(const json::Value& deco, const Pos& base) {
                 const TypeView decoType(deco);
-                static const int kVineBits[4] = {1, 2, 4, 8};
+                // vine_direction_bits names the side the vine hangs on (1 south, 2 west, 4 north, 8 east), by kDirX/kDirZ index.
+                static const int kVineBits[4] = {4, 8, 1, 2};
                 if (Is(decoType, "trunk_vine")) {
                     const std::vector<Pos> logs = w.logs;
                     for (const Pos& p : logs)

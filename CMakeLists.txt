@@ -83,6 +83,7 @@ set(PERLITE_SOURCES
     src/server/Config.cpp
     src/server/Server.cpp
     src/server/Placement.cpp
+    src/server/Support.cpp
     src/server/Fire.cpp
     src/server/Fluids.cpp
     src/server/RandomTicks.cpp
@@ -134,6 +135,8 @@ set(PERLITE_SOURCES
     src/world/level/levelgen/bedrock/BiomeTable.cpp
     src/world/level/levelgen/bedrock/BiomeTree.cpp
     src/world/level/levelgen/bedrock/BiomeVolume.cpp
+    src/world/level/levelgen/bedrock/BlockTraits.cpp
+    src/world/level/levelgen/bedrock/BlockTraitsData.cpp
     src/world/level/levelgen/bedrock/Carvers.cpp
     src/world/level/levelgen/bedrock/Pack.cpp
     src/world/level/levelgen/bedrock/Surface.cpp

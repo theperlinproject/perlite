@@ -186,6 +186,7 @@ namespace perlite {
             int dimension = 0;
         };
         bool UseBlock(Session& by, int x, int y, int z);
+        bool ToggleOpenable(Session& by, int dimension, int x, int y, int z);
         void TickBrewing(BlockContainer& c);
         void SyncContainer(Session& by);
         void CloseContainer(Session& by);
@@ -402,6 +403,15 @@ namespace perlite {
         std::vector<PortalFrame> portals;
         void TickPortals();
         void TickGravity();
+        // Blocks that need something to stand on or hang from (plants, torches, rails, ladders...) break
+        // when that block goes; a change queues its neighbours for the check at the next tick.
+        void QueueSupportChecks(int dimension, int x, int y, int z);
+        void TickSupport();
+        bool StillSupported(int dimension, int x, int y, int z, uint16_t block);
+        struct SupportCheck {
+            int dimension, x, y, z;
+        };
+        std::vector<SupportCheck> supportQueue;
         void TickFire();
         void TickFluids();
         void QueueBlockUpdate(int dimension, int x, int y, int z, uint16_t block, int layer);

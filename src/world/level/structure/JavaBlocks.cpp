@@ -236,9 +236,11 @@ namespace perlite::structure {
                 return p;
             }
             if (EndsWith(n, "_door") || n == "wooden_door") {
-                // Bedrock doors face where the player looked when placing them; templates name the
-                // direction a door faces outward: the same.
-                p["minecraft:cardinal_direction"] = facing.empty() ? "north" : facing;
+                // A Bedrock door's cardinal direction is a quarter turn clockwise of the way it faces.
+                static const std::unordered_map<std::string, std::string> kClockwise = {
+                    {"north", "east"}, {"east", "south"}, {"south", "west"}, {"west", "north"}};
+                const auto turned = kClockwise.find(facing.empty() ? "north" : facing);
+                p["minecraft:cardinal_direction"] = turned->second;
                 p["upper_block_bit"] = Bit(half == "upper");
                 p["door_hinge_bit"] = Bit(s.Get("hinge") == "right");
                 p["open_bit"] = Bit(True(s, "open"));

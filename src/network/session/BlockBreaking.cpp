@@ -180,7 +180,6 @@ namespace perlite {
                 const auto& at = action.position;
                 switch (action.action) {
                 case proto::Action::StartBreak:
-                case proto::Action::CrackBreak:
                     lastActive = std::chrono::steady_clock::now();
                     if (creative) {
                         StopBreaking();
@@ -188,6 +187,16 @@ namespace perlite {
                     } else {
                         StartBreaking(at.x, at.y, at.z, action.face);
                     }
+                    break;
+                case proto::Action::CrackBreak:
+                    // Sent every tick while the player keeps digging: bits fly off the face being hit.
+                    lastActive = std::chrono::steady_clock::now();
+                    if (creative)
+                        break;
+                    if (!breaking.active || breaking.x != at.x || breaking.y != at.y || breaking.z != at.z)
+                        StartBreaking(at.x, at.y, at.z, action.face);
+                    if (breaking.active)
+                        PunchBlock(at.x, at.y, at.z, action.face);
                     break;
                 case proto::Action::ContinueBreak:
                     lastActive = std::chrono::steady_clock::now();

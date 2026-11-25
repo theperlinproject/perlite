@@ -40,8 +40,12 @@ namespace perlite {
                                      static_cast<int64_t>(rng() % static_cast<unsigned>(std::max<int64_t>(1, c["max_inclusive"].Int(1) - c["min_inclusive"].Int(1) + 1))));
         count = std::clamp(count, 1, 8);
         const bool water = (def->flags & mobflag::Aquatic) != 0;
+        std::vector<std::pair<int, int>> taken;
         for (int i = 0; i < count; i++) {
             const int px = x + static_cast<int>(rng() % 7) - 3, pz = z + static_cast<int>(rng() % 7) - 3;
+            // One mob to a block: a pack spreads out instead of piling into the same spot.
+            if (std::find(taken.begin(), taken.end(), std::make_pair(px, pz)) != taken.end())
+                continue;
             const int y = chunkGen ? SurfaceY(px, pz) : surfaceY;
             if (y <= kMinY)
                 continue;
@@ -61,6 +65,16 @@ namespace perlite {
                     !g.contains("mycelium") && !g.contains("dirt") && !g.contains("moss"))
                     continue;
             }
+            bool crowded = false;
+            for (const Mob& other : mobs)
+                if (!other.deathTime && std::abs(other.x - (px + 0.5)) < 1.0 && std::abs(other.z - (pz + 0.5)) < 1.0 &&
+                    std::abs(other.y - sy) < 2.0) {
+                    crowded = true;
+                    break;
+                }
+            if (crowded)
+                continue;
+            taken.emplace_back(px, pz);
             Mob* m = Spawn(def->id, px + 0.5, sy, pz + 0.5, category == "creature");
             if (m && (def->flags & mobflag::Hostile) == 0 && rng() % 20 == 0)
                 m->baby = true;

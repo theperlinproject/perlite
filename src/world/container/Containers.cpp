@@ -108,6 +108,64 @@ namespace perlite {
         return -1;
     }
 
+    // Wooden doors, trapdoors and fence gates open and close by hand (iron ones only by redstone). A door
+    // keeps the same open state in both halves; a gate opened from behind swings away from the player.
+    bool Server::ToggleOpenable(Session& by, int dim, int x, int y, int z) {
+        ChunkManager& world = World(dim);
+        const uint16_t block = world.GetBlock(x, y, z);
+        const std::string name = BlockRegistry::Instance().Name(block);
+        const bool door = name.ends_with("_door") && !name.ends_with("trapdoor");
+        const bool trapdoor = name.ends_with("trapdoor");
+        const bool gate = name.ends_with("fence_gate");
+        if (!door && !trapdoor && !gate)
+            return false;
+        if (name == "minecraft:iron_door" || name == "minecraft:iron_trapdoor")
+            return false;
+        StateList states = BlockRegistry::Instance().States(block);
+        bool open = false;
+        for (const auto& [k, v] : states)
+            if (k == "open_bit")
+                if (const bool* b = std::get_if<bool>(&v))
+                    open = !*b;
+        const auto withOpen = [&](uint16_t id, bool value, const std::string* facing) {
+            StateList st = BlockRegistry::Instance().States(id);
+            for (auto& [k, v] : st) {
+                if (k == "open_bit")
+                    v = value;
+                if (facing && k == "minecraft:cardinal_direction")
+                    v = *facing;
+            }
+            const uint16_t next = BlockRegistry::Instance().Intern(BlockRegistry::Instance().Name(id), st);
+            return BlockCatalog::Instance().KnownHash(BlockRegistry::Instance().Hash(next)) ? next : id;
+        };
+        std::string facing;
+        if (gate && open) {
+            // Swing away from the player: a gate seen from its back turns round first.
+            const float yaw = by.Yaw();
+            const int look = static_cast<int>(std::floor(yaw / 90.0f + 0.5f)) & 3; // 0 south, 1 west, 2 north, 3 east
+            static const char* const kLook[4] = {"south", "west", "north", "east"};
+            static const char* const kOpposite[4] = {"north", "east", "south", "west"};
+            for (const auto& [k, v] : states)
+                if (k == "minecraft:cardinal_direction")
+                    if (const std::string* f = std::get_if<std::string>(&v); f && *f == kOpposite[look])
+                        facing = kLook[look];
+        }
+        ApplyBlock(dim, x, y, z, withOpen(block, open, facing.empty() ? nullptr : &facing));
+        if (door) {
+            for (int dy : {-1, 1}) {
+                const uint16_t other = world.GetBlock(x, y + dy, z);
+                if (BlockRegistry::Instance().Name(other) == name)
+                    ApplyBlock(dim, x, y + dy, z, withOpen(other, open, nullptr));
+            }
+        }
+        const char* sound = door ? (open ? "DoorOpen" : "DoorClose") : trapdoor ? (open ? "TrapdoorOpen" : "TrapdoorClose")
+                                                                         : (open ? "FenceGateOpen" : "FenceGateClose");
+        const int32_t hash = BlockRegistry::Instance().Hash(block);
+        for (Session* s : PlayersIn(dim))
+            s->PlaySound(sound, x + 0.5, y + 0.5, z + 0.5, hash);
+        return true;
+    }
+
     bool Server::UseBlock(Session& by, int x, int y, int z) {
         const int dim = by.DimensionId();
         ChunkManager& world = World(dim);
@@ -146,6 +204,8 @@ namespace perlite {
             by.StartSleeping(x, y, z);
             return true;
         }
+        if (ToggleOpenable(by, dim, x, y, z))
+            return true;
         const int kind = ContainerKindOf(name);
         if (kind < 0)
             return false;

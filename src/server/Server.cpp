@@ -451,19 +451,28 @@ namespace perlite {
                 stepRemaining--;
             TickItems();
             sections.Mark("items");
+            // Animals come with new land only: a chunk read back from the world does not breed a new herd.
+            const auto fresh = [](ChunkManager& w, ChunkPos pos) {
+                const auto entry = w.Peek(pos);
+                return entry && entry->column.generatedNow;
+            };
             for (const ChunkPos& ready : chunks->TakeReady()) {
+                const bool generated = fresh(*chunks, ready);
                 LoadContainers(kOverworld, ready);
                 ConsumeGenerated(kOverworld, ready);
                 ConnectChunk(kOverworld, ready);
-                mobWorld->OnChunkReady(ready.x, ready.z);
+                if (generated)
+                    mobWorld->OnChunkReady(ready.x, ready.z);
             }
             for (size_t d = 0; d < otherWorlds.size(); d++)
                 if (otherWorlds[d])
                     for (const ChunkPos& ready : otherWorlds[d]->TakeReady()) {
+                        const bool generated = fresh(*otherWorlds[d], ready);
                         LoadContainers(static_cast<int>(d), ready);
                         ConsumeGenerated(static_cast<int>(d), ready);
                         ConnectChunk(static_cast<int>(d), ready);
-                        MobsIn(static_cast<int>(d)).OnChunkReady(ready.x, ready.z);
+                        if (generated)
+                            MobsIn(static_cast<int>(d)).OnChunkReady(ready.x, ready.z);
                         if (static_cast<int>(d) == kEnd)
                             fight->OnChunkReady(ready.x, ready.z);
                     }
@@ -480,6 +489,7 @@ namespace perlite {
             TickPortals();
             sections.Mark("portals");
             TickGravity();
+            TickSupport();
             TickFire();
             sections.Mark("blocks");
             TickFluids();
@@ -687,9 +697,16 @@ namespace perlite {
             by.SendInventory();
             return;
         }
+        // Thrown the way the player looks, up or down too, with a little scatter, from just below the eyes.
+        static std::mt19937 rng{std::random_device{}()};
+        std::uniform_real_distribution<double> unit(0.0, 1.0);
         const double yaw = static_cast<double>(by.Yaw()) * 3.14159265358979323846 / 180.0;
-        const double dx = -std::sin(yaw), dz = std::cos(yaw);
-        SpawnItem(stack, by.X() + dx * 0.3, by.Y() - 0.3, by.Z() + dz * 0.3, dx * 0.3, 0.2, dz * 0.3, 40, by.DimensionId());
+        const double pitch = static_cast<double>(by.Pitch()) * 3.14159265358979323846 / 180.0;
+        const double spin = unit(rng) * 2.0 * 3.14159265358979323846, spread = 0.02 * unit(rng);
+        const double vx = -std::sin(yaw) * std::cos(pitch) * 0.3 + std::cos(spin) * spread;
+        const double vy = -std::sin(pitch) * 0.3 + 0.1 + (unit(rng) - unit(rng)) * 0.1;
+        const double vz = std::cos(yaw) * std::cos(pitch) * 0.3 + std::sin(spin) * spread;
+        SpawnItem(stack, by.X(), by.Y() - 0.3, by.Z(), vx, vy, vz, 40, by.DimensionId());
     }
 
     void Server::TickItems() {
@@ -703,7 +720,8 @@ namespace perlite {
                 return true;
             if (!world || !world->Peek({bx >> 4, bz >> 4}))
                 return true;
-            return world->GetBlock(bx, by, bz) != BlockRegistry::kAir;
+            // Items fall through plants, flowers, water and the like, as they pass through players.
+            return BlockSolid(world->GetBlock(bx, by, bz));
         };
         std::array<std::vector<Session*>, kDimensionCount> byDimension;
         for (int d = 0; d < kDimensionCount; d++)
@@ -1225,6 +1243,7 @@ namespace perlite {
         if (liquidChange >= 0)
             QueueBlockUpdate(dimension, x, y, z, static_cast<uint16_t>(liquidChange), 1);
         FluidNeighbourChanged(dimension, x, y, z);
+        QueueSupportChecks(dimension, x, y, z);
         RefreshConnectionsAround(dimension, x, y, z);
         if (listens)
             plugins->Dispatch<abi::Event::BlockChanged>(

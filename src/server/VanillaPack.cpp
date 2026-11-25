@@ -27,7 +27,7 @@ namespace perlite::vanillapack {
         constexpr const char* kLinks = "https://net-secondary.web.minecraft-services.net/api/v1.0/download/links";
         constexpr const char* kMarker = ".source";
         // Bumped when the layout of the kept pack changes, so an older copy is rebuilt.
-        constexpr const char* kLayout = "bds-pack 2";
+        constexpr const char* kLayout = "bds-pack 3"; // 3: also the definitions/ features and feature rules
 
         bool Complete(const fs::path& dir) {
             std::error_code ec;
@@ -205,6 +205,7 @@ namespace perlite::vanillapack {
             mz_uint index;
         };
         std::map<std::vector<int>, std::pair<std::string, std::vector<Entry>>> packs;
+        std::vector<Entry> definitions;
         const mz_uint count = mz_zip_reader_get_num_files(&archive);
         for (mz_uint i = 0; i < count; i++) {
             mz_zip_archive_file_stat st;
@@ -212,6 +213,16 @@ namespace perlite::vanillapack {
                 continue;
             std::string name = st.m_filename;
             std::replace(name.begin(), name.end(), '\\', '/');
+            // The server's world generation features and their placement rules are kept beside the
+            // packs, in definitions/; the world generator reads them from the kept folder.
+            for (const char* folder : {"definitions/features/", "definitions/feature_rules/"}) {
+                const size_t def = name.find(folder);
+                if (def != std::string::npos && def == name.find("definitions/")) {
+                    const std::string rel = name.substr(def + std::strlen("definitions/"));
+                    if (Safe(rel))
+                        definitions.push_back({rel, i});
+                }
+            }
             const size_t at = name.find("behavior_packs/");
             if (at == std::string::npos)
                 continue;
@@ -286,6 +297,14 @@ namespace perlite::vanillapack {
                 write(e.rel, std::string_view(static_cast<const char*>(data), size));
                 mz_free(data);
             }
+        }
+        for (const Entry& e : definitions) {
+            size_t size = 0;
+            void* data = mz_zip_reader_extract_to_heap(&archive, e.index, &size, 0);
+            if (!data)
+                continue;
+            write(e.rel, std::string_view(static_cast<const char*>(data), size));
+            mz_free(data);
         }
         mz_zip_reader_end(&archive);
         if (!Complete(part)) {
